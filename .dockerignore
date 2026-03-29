@@ -6,8 +6,9 @@ frontend/dist/
 .git/
 .github/
 *.md
-*.txt
 .env
 .env.*
 .vscode/
 static/
+STYLING_PROMPT.txt
+implementation_plan.md
