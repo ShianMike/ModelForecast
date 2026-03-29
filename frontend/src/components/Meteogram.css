@@ -1,0 +1,44 @@
+.meteogram {
+  margin: 12px 16px;
+  padding: 16px;
+  max-height: 60vh;
+  overflow-y: auto;
+}
+
+.meteogram-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+  font-size: 13px;
+  color: var(--text-primary);
+}
+
+.meteogram-panel {
+  margin-bottom: 16px;
+}
+
+.meteogram-panel .section-label {
+  margin-bottom: 6px;
+}
+
+.meteogram-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 40px;
+}
+
+.meteogram-empty {
+  padding: 40px;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+@media (max-width: 768px) {
+  .meteogram {
+    margin: 8px;
+    padding: 12px;
+  }
+}

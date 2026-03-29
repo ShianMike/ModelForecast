@@ -1,0 +1,45 @@
+.app {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: row;
+}
+
+.app-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  margin-left: 320px;
+  overflow-x: clip;
+}
+
+.map-container {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+}
+
+.app-loading {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  color: var(--text-secondary);
+  font-size: 14px;
+}
+
+.app-error-text {
+  color: var(--red);
+}
+
+@media (max-width: 1024px) {
+  .app {
+    flex-direction: column;
+  }
+  .app-main {
+    margin-left: 0;
+    padding: 0;
+  }
+}

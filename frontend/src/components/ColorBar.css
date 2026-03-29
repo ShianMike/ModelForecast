@@ -1,0 +1,52 @@
+.color-bar {
+  position: absolute;
+  bottom: 80px;
+  right: 16px;
+  z-index: 500;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  padding: 8px 10px;
+  background: rgba(17, 17, 17, 0.88);
+  backdrop-filter: blur(8px);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+[data-theme="light"] .color-bar {
+  background: rgba(255, 255, 255, 0.88);
+}
+
+.color-bar-gradient {
+  width: 200px;
+  height: 10px;
+  border-radius: 3px;
+  border: 1px solid var(--border);
+}
+
+.color-bar-labels {
+  display: flex;
+  justify-content: space-between;
+  width: 200px;
+}
+
+.color-bar-label {
+  font-size: 9px;
+  color: var(--text-secondary);
+}
+
+.color-bar-unit {
+  font-size: 9px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+@media (max-width: 768px) {
+  .color-bar {
+    right: 8px;
+    bottom: 96px;
+  }
+  .color-bar-gradient, .color-bar-labels { width: 140px; }
+}
