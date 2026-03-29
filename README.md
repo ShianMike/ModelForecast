@@ -10,7 +10,7 @@
 
 A full-stack weather model forecast viewer that fetches real-time gridded forecast data from NOAA NOMADS, decodes GRIB2 with a pure-Python decoder, and renders interactive map overlays with wind arrows, color-coded parameters, and animation controls — inspired by Pivotal Weather and Aguacero.
 
-**Live site:** <https://model-forecast-omtebvnjea-uc.a.run.app/ModelForecast/>
+**Live site:** <https://shianmike.github.io/ModelForecast/>
 
 ---
 
