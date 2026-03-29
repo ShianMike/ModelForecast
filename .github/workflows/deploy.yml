@@ -45,9 +45,9 @@ jobs:
             --region ${{ env.REGION }} \
             --platform managed \
             --allow-unauthenticated \
-            --memory 512Mi \
-            --cpu 1 \
+            --memory 1Gi \
+            --cpu 2 \
             --timeout 300 \
-            --min-instances 0 \
+            --min-instances 1 \
             --max-instances 3 \
             --set-env-vars "GUNICORN_THREADS=4,WEB_CONCURRENCY=2"
