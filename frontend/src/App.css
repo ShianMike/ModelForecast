@@ -4,6 +4,15 @@
   flex-direction: row;
 }
 
+/* ── Draggable panel headers ─────────────────────────────── */
+.drag-handle {
+  cursor: grab;
+  user-select: none;
+}
+.drag-handle:active {
+  cursor: grabbing;
+}
+
 .app-main {
   flex: 1;
   min-width: 0;
@@ -17,6 +26,20 @@
   position: relative;
   flex: 1;
   min-height: 0;
+}
+
+/* ── Compare mode: side-by-side maps ─────────────────────── */
+.map-container.map-compare {
+  display: flex;
+  flex-direction: row;
+}
+.map-compare > .forecast-map {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+}
+.map-compare > .forecast-map + .forecast-map {
+  border-left: 2px solid var(--border);
 }
 
 .app-loading {

@@ -13,6 +13,7 @@
   background: transparent;
   border: none;
   border-radius: var(--radius-sm);
+  color: var(--text-primary);
   cursor: pointer;
   transition: background 0.15s ease;
 }

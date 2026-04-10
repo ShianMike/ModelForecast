@@ -16,7 +16,8 @@
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 16px 20px;
+  height: 51px;
+  padding: 0 20px;
   font-size: 15px;
   font-weight: 700;
   color: var(--text-primary);
@@ -121,6 +122,39 @@
   display: grid;
   grid-template-columns: repeat(3, 1fr);
   gap: 6px;
+}
+.region-item {
+  display: flex;
+  gap: 2px;
+}
+.region-item .btn {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.region-delete {
+  width: 24px !important;
+  height: 24px !important;
+  flex-shrink: 0;
+  align-self: center;
+  border: none !important;
+  color: var(--text-muted) !important;
+}
+.region-delete:hover {
+  color: var(--red) !important;
+}
+.region-save-row {
+  display: flex;
+  gap: 6px;
+}
+.region-save-row .input {
+  flex: 1;
+  padding: 6px 10px;
+  font-size: 12px;
+}
+.region-save-row .btn {
+  flex-shrink: 0;
+  padding: 6px 10px;
 }
 
 /* ── Mobile ──────────────────────────────────────────── */

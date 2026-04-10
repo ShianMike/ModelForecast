@@ -22,6 +22,14 @@ def _signed16(raw):
     return val
 
 
+def _signed32(raw):
+    """Decode a 4-byte GRIB2 sign-magnitude integer."""
+    val = struct.unpack(">I", raw)[0]
+    if val & 0x80000000:
+        return -(val & 0x7FFFFFFF)
+    return val
+
+
 def decode_grib2(data):
     """Decode all GRIB2 messages in a byte buffer.
 
@@ -129,9 +137,9 @@ def _parse_grid_latlon(data, pos):
     npts = struct.unpack(">I", data[pos + 6 : pos + 10])[0]
     Ni = struct.unpack(">I", data[pos + 30 : pos + 34])[0]
     Nj = struct.unpack(">I", data[pos + 34 : pos + 38])[0]
-    la1 = struct.unpack(">i", data[pos + 46 : pos + 50])[0] / 1e6
+    la1 = _signed32(data[pos + 46 : pos + 50]) / 1e6
     lo1 = struct.unpack(">I", data[pos + 50 : pos + 54])[0] / 1e6
-    la2 = struct.unpack(">i", data[pos + 55 : pos + 59])[0] / 1e6
+    la2 = _signed32(data[pos + 55 : pos + 59]) / 1e6
     lo2 = struct.unpack(">I", data[pos + 59 : pos + 63])[0] / 1e6
 
     return {
@@ -151,15 +159,15 @@ def _parse_grid_lambert(data, pos):
     npts = struct.unpack(">I", data[pos + 6 : pos + 10])[0]
     Nx = struct.unpack(">I", data[pos + 30 : pos + 34])[0]
     Ny = struct.unpack(">I", data[pos + 34 : pos + 38])[0]
-    La1 = struct.unpack(">i", data[pos + 38 : pos + 42])[0] / 1e6
-    Lo1 = struct.unpack(">i", data[pos + 42 : pos + 46])[0] / 1e6
-    LaD = struct.unpack(">i", data[pos + 47 : pos + 51])[0] / 1e6
-    LoV = struct.unpack(">i", data[pos + 51 : pos + 55])[0] / 1e6
+    La1 = _signed32(data[pos + 38 : pos + 42]) / 1e6
+    Lo1 = _signed32(data[pos + 42 : pos + 46]) / 1e6
+    LaD = _signed32(data[pos + 47 : pos + 51]) / 1e6
+    LoV = _signed32(data[pos + 51 : pos + 55]) / 1e6
     Dx = struct.unpack(">I", data[pos + 55 : pos + 59])[0] / 1e3  # mm → m
     Dy = struct.unpack(">I", data[pos + 59 : pos + 63])[0] / 1e3  # mm → m
     scan_mode = data[pos + 64]
-    Latin1 = struct.unpack(">i", data[pos + 65 : pos + 69])[0] / 1e6
-    Latin2 = struct.unpack(">i", data[pos + 69 : pos + 73])[0] / 1e6
+    Latin1 = _signed32(data[pos + 65 : pos + 69]) / 1e6
+    Latin2 = _signed32(data[pos + 69 : pos + 73]) / 1e6
 
     # Ensure Lo1 is in [0, 360] for consistent projection math
     if Lo1 < 0:
@@ -291,7 +299,7 @@ def _parse_packing(data, pos):
     E = _signed16(data[pos + 15 : pos + 17])
     D = _signed16(data[pos + 17 : pos + 19])
     nbits = data[pos + 19]
-    return {
+    info = {
         "nvals": nvals,
         "template": tmpl,
         "ref": ref,
@@ -299,6 +307,24 @@ def _parse_packing(data, pos):
         "D": D,
         "nbits": nbits,
     }
+    # Complex packing (5.2) and complex packing with spatial differencing (5.3)
+    if tmpl in (2, 3):
+        # Octet 21: type of original field values (skip)
+        info["group_split_method"] = data[pos + 21]
+        info["missing_mgmt"] = data[pos + 22]
+        info["primary_missing"] = struct.unpack(">f", data[pos + 23 : pos + 27])[0]
+        info["secondary_missing"] = struct.unpack(">f", data[pos + 27 : pos + 31])[0]
+        info["NG"] = struct.unpack(">I", data[pos + 31 : pos + 35])[0]
+        info["ref_group_widths"] = data[pos + 35]
+        info["nbits_group_widths"] = data[pos + 36]
+        info["ref_group_lengths"] = struct.unpack(">I", data[pos + 37 : pos + 41])[0]
+        info["length_increment"] = data[pos + 41]
+        info["last_group_length"] = struct.unpack(">I", data[pos + 42 : pos + 46])[0]
+        info["nbits_group_lengths"] = data[pos + 46]
+        if tmpl == 3:
+            info["spatial_order"] = data[pos + 47]
+            info["extra_octets"] = data[pos + 48]
+    return info
 
 
 def _parse_bitmap(data, pos, npts):
@@ -329,6 +355,8 @@ def _unpack_data(packed_data, packing):
 
     if tmpl == 0:
         return _unpack_simple(packed_data, nvals, nbits)
+    elif tmpl in (2, 3):
+        return _unpack_complex(packed_data, packing)
     elif tmpl == 40:
         return _unpack_jpeg2000(packed_data, nvals)
     else:
@@ -355,6 +383,112 @@ def _unpack_jpeg2000(packed_data, nvals):
     img = Image.open(io.BytesIO(packed_data))
     arr = np.array(img).flatten().astype(np.int64)
     return arr[:nvals]
+
+
+def _extract_n_bits(all_bits, bit_offset, n_values, n_bits):
+    """Extract n_values integers of n_bits each from a bit array starting at bit_offset."""
+    if n_bits == 0 or n_values == 0:
+        return np.zeros(n_values, dtype=np.int64), bit_offset
+    end = bit_offset + n_values * n_bits
+    segment = all_bits[bit_offset:end]
+    if len(segment) < n_values * n_bits:
+        segment = np.pad(segment, (0, n_values * n_bits - len(segment)))
+    bits = segment.reshape(n_values, n_bits)
+    powers = np.int64(1) << np.arange(n_bits - 1, -1, -1, dtype=np.int64)
+    values = (bits.astype(np.int64) * powers).sum(axis=1)
+    return values, end
+
+
+def _unpack_complex(packed_data, packing):
+    """Template 5.2/5.3 — complex packing (with optional spatial differencing).
+
+    Implements the GRIB2 complex packing scheme used by GFS/HRRR on AWS S3.
+    """
+    nvals = packing["nvals"]
+    NG = packing["NG"]
+    nbits_ref = packing["nbits"]
+    ref_widths = packing["ref_group_widths"]
+    nbits_widths = packing["nbits_group_widths"]
+    ref_lengths = packing["ref_group_lengths"]
+    length_incr = packing["length_increment"]
+    last_group_len = packing["last_group_length"]
+    nbits_lengths = packing["nbits_group_lengths"]
+
+    spatial_order = packing.get("spatial_order", 0)
+    extra_octets = packing.get("extra_octets", 0)
+
+    data = packed_data
+    offset = 0  # byte offset into data
+
+    # ── 1. Read spatial differencing descriptors (template 5.3) ──
+    ival1 = ival2 = 0
+    overall_min = 0
+    if spatial_order > 0 and extra_octets > 0:
+        if spatial_order >= 1:
+            ival1 = int.from_bytes(data[offset:offset + extra_octets], "big")
+            offset += extra_octets
+        if spatial_order >= 2:
+            ival2 = int.from_bytes(data[offset:offset + extra_octets], "big")
+            offset += extra_octets
+        # Overall minimum: sign-magnitude (high bit = sign)
+        raw_min = int.from_bytes(data[offset:offset + extra_octets], "big")
+        offset += extra_octets
+        sign_bit = 1 << (extra_octets * 8 - 1)
+        if raw_min & sign_bit:
+            overall_min = -(raw_min & (sign_bit - 1))
+        else:
+            overall_min = raw_min
+
+    # ── 2. Unpack group reference values, widths, lengths from bit stream ──
+    all_bits = np.unpackbits(np.frombuffer(data[offset:], dtype=np.uint8))
+    bit_pos = 0
+
+    # Group reference values (NG values, nbits_ref bits each)
+    group_refs, bit_pos = _extract_n_bits(all_bits, bit_pos, NG, nbits_ref)
+    bit_pos = ((bit_pos + 7) // 8) * 8  # byte-align
+
+    # Group bit widths (NG values, nbits_widths bits each)
+    group_widths, bit_pos = _extract_n_bits(all_bits, bit_pos, NG, nbits_widths)
+    bit_pos = ((bit_pos + 7) // 8) * 8  # byte-align
+    group_widths = group_widths + ref_widths
+
+    # Group scaled lengths (NG values, nbits_lengths bits each)
+    group_lengths, bit_pos = _extract_n_bits(all_bits, bit_pos, NG, nbits_lengths)
+    bit_pos = ((bit_pos + 7) // 8) * 8  # byte-align
+    group_lengths = group_lengths * length_incr + ref_lengths
+    group_lengths[-1] = last_group_len
+
+    # ── 3. Decode each group's values ──
+    result = np.zeros(nvals, dtype=np.int64)
+    val_idx = 0
+    for g in range(NG):
+        gw = int(group_widths[g])
+        gl = int(group_lengths[g])
+        if gl == 0:
+            continue
+        if gw == 0:
+            # All values in this group equal the group reference
+            result[val_idx:val_idx + gl] = group_refs[g]
+        else:
+            vals, bit_pos = _extract_n_bits(all_bits, bit_pos, gl, gw)
+            result[val_idx:val_idx + gl] = vals + group_refs[g]
+        val_idx += gl
+
+    # ── 4. Add overall minimum ──
+    result[:val_idx] += overall_min
+
+    # ── 5. Reverse spatial differencing (template 5.3) ──
+    if spatial_order == 1 and val_idx > 0:
+        result[0] = ival1
+        for i in range(1, val_idx):
+            result[i] = result[i] + result[i - 1]
+    elif spatial_order == 2 and val_idx > 1:
+        result[0] = ival1
+        result[1] = ival2
+        for i in range(2, val_idx):
+            result[i] = result[i] + 2 * result[i - 1] - result[i - 2]
+
+    return result[:nvals]
 
 
 def _apply_scaling(raw_values, packing):

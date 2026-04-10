@@ -37,26 +37,28 @@ app = Flask(__name__, static_folder=FRONTEND_DIR, static_url_path="")
 # ─── CORS ──────────────────────────────────────────────────
 CORS(app, resources={r"/api/*": {"origins": ALLOWED_ORIGINS}}, supports_credentials=False)
 
-# ─── Rate limiting ─────────────────────────────────────────
+# ─── Rate limiting (production only) ───────────────────────
+_is_production = bool(os.environ.get("K_SERVICE"))
 limiter = Limiter(
     get_remote_address,
     app=app,
-    default_limits=["200 per minute", "30 per second"],
+    default_limits=["2000 per minute", "120 per second"] if _is_production else [],
     storage_uri="memory://",
+    enabled=_is_production,
 )
 
 # ─── Security headers via Talisman ─────────────────────────
-_is_production = bool(os.environ.get("K_SERVICE"))
 
 csp = {
     "default-src": "'self'",
-    "script-src":  "'self' 'unsafe-inline'",
+    "script-src":  "'self' 'unsafe-inline' https://unpkg.com",
     "style-src":   "'self' 'unsafe-inline' https://fonts.googleapis.com https://unpkg.com",
     "font-src":    "'self' https://fonts.gstatic.com data:",
     "img-src":     "'self' data: blob: https://*.basemaps.cartocdn.com https://*.tile.openstreetmap.org "
                    "https://server.arcgisonline.com https://tilecache.rainviewer.com",
     "connect-src": "'self' https://api.open-meteo.com https://archive-api.open-meteo.com "
-                   "https://api.rainviewer.com https://*.run.app",
+                   "https://ensemble-api.open-meteo.com https://api.rainviewer.com "
+                   "https://unpkg.com https://*.run.app",
     "media-src":   "'self' blob:",
     "frame-ancestors": "'none'",
     "base-uri":    "'self'",

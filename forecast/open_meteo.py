@@ -117,7 +117,7 @@ DEFAULT_BBOX = {
 # ─── Server-side cache ────────────────────────────────────
 _cache = {}
 _cache_lock = threading.Lock()
-_CACHE_TTL = 600  # 10 minutes
+_CACHE_TTL = 1800  # 30 minutes
 
 MAX_TOTAL_POINTS = 300   # target grid size
 BATCH_SIZE = 80          # coordinates per API call
@@ -136,10 +136,15 @@ def _cache_get(key):
 def _cache_set(key, data):
     with _cache_lock:
         now = time.time()
-        if len(_cache) > 30:
+        if len(_cache) > 200:
             expired = [k for k, v in _cache.items() if (now - v["ts"]) > _CACHE_TTL]
             for k in expired:
                 del _cache[k]
+            # If still over limit, drop oldest entries
+            if len(_cache) > 200:
+                oldest = sorted(_cache, key=lambda k: _cache[k]["ts"])[:50]
+                for k in oldest:
+                    del _cache[k]
         _cache[key] = {"data": data, "ts": now}
 
 

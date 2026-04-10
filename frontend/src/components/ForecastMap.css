@@ -72,3 +72,36 @@
 .leaflet-control-zoom a:hover {
   background: var(--bg-hover) !important;
 }
+
+/* ── Timestamp overlay ───────────────────────────────────── */
+.map-timestamp {
+  position: absolute;
+  bottom: 60px;
+  left: 12px;
+  z-index: 500;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 12px;
+  background: rgba(10, 10, 10, 0.8);
+  backdrop-filter: blur(8px);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  pointer-events: none;
+  font-size: 12px;
+}
+[data-theme="light"] .map-timestamp {
+  background: rgba(255, 255, 255, 0.85);
+}
+.map-timestamp-model {
+  font-family: var(--font-mono);
+  font-weight: 800;
+  font-size: 11px;
+  color: var(--text-accent);
+}
+.map-timestamp-time {
+  font-family: var(--font-mono);
+  font-weight: 700;
+  font-size: 11px;
+  color: var(--text-primary);
+}

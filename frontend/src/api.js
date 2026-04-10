@@ -84,3 +84,55 @@ export async function fetchColorScale(cmapName) {
   if (!res.ok) throw new Error(data.error || "Color scale fetch failed");
   return data;
 }
+
+/* Point time-series for meteogram */
+export async function fetchMeteogram({ model, lat, lon }) {
+  const params = new URLSearchParams({ model, lat: String(lat), lon: String(lon) });
+  const res = await fetchWithTimeout(`${API_BASE}/api/meteogram?${params}`, {}, 20000);
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || "Meteogram fetch failed");
+  return data;
+}
+
+/* Vertical sounding profile at a point */
+export async function fetchSounding({ model, lat, lon, fhour }) {
+  const params = new URLSearchParams({ model, lat: String(lat), lon: String(lon), fhour: String(fhour || 0) });
+  const res = await fetchWithTimeout(`${API_BASE}/api/sounding?${params}`, {}, 25000);
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || "Sounding fetch failed");
+  return data;
+}
+
+/* Full sounding plot from Sounding Analysis project */
+export async function fetchSoundingPlot({ model, lat, lon, fhour, theme, colorblind }) {
+  const params = new URLSearchParams({
+    model, lat: String(lat), lon: String(lon), fhour: String(fhour || 0),
+    theme: theme || "dark", colorblind: String(!!colorblind),
+  });
+  const res = await fetchWithTimeout(`${API_BASE}/api/sounding-plot?${params}`, {}, 65000);
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || "Sounding plot fetch failed");
+  return data;
+}
+
+/* Cross-section along a line */
+export async function fetchCrossSection({ model, variable, fhour, lat1, lon1, lat2, lon2 }) {
+  const params = new URLSearchParams({
+    model, variable, fhour: String(fhour || 0),
+    lat1: String(lat1), lon1: String(lon1),
+    lat2: String(lat2), lon2: String(lon2),
+  });
+  const res = await fetchWithTimeout(`${API_BASE}/api/cross-section?${params}`, {}, 30000);
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || "Cross-section fetch failed");
+  return data;
+}
+
+/* Ensemble plume data at a point */
+export async function fetchEnsemble({ variable, lat, lon }) {
+  const params = new URLSearchParams({ variable, lat: String(lat), lon: String(lon) });
+  const res = await fetchWithTimeout(`${API_BASE}/api/ensemble?${params}`, {}, 25000);
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || "Ensemble fetch failed");
+  return data;
+}

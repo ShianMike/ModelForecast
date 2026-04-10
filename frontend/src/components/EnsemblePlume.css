@@ -1,10 +1,10 @@
-.meteogram {
+.ensemble-plume {
   position: absolute;
   left: 12px;
   top: 12px;
   width: 520px;
   height: min(560px, calc(100% - 24px));
-  overflow-y: auto;
+  overflow: hidden;
   z-index: 1001;
   padding: 14px;
   background: var(--bg-card);
@@ -12,29 +12,31 @@
   border-radius: 12px;
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
   backdrop-filter: blur(12px);
+  display: flex;
+  flex-direction: column;
 }
-
-.meteogram.meteogram-collapsed {
+.ensemble-plume.ensemble-collapsed {
   height: auto;
 }
 
-.meteogram-header {
+.ensemble-header {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 8px;
   margin-bottom: 10px;
   font-size: 13px;
   color: var(--text-primary);
+  flex-shrink: 0;
 }
 
-.meteogram-range-btns {
+.ensemble-range-btns {
   display: flex;
   gap: 2px;
   flex-shrink: 0;
 }
 
-.meteogram-range-btns .range-btn {
+.range-btn {
   padding: 2px 8px;
   font-size: 10px;
   border: 1px solid var(--border);
@@ -43,43 +45,43 @@
   color: var(--text-muted);
   cursor: pointer;
 }
-.meteogram-range-btns .range-btn:hover { background: var(--border); }
-.meteogram-range-btns .range-btn.active {
+.range-btn:hover { background: var(--border); }
+.range-btn.active {
   background: var(--accent);
   color: #fff;
   border-color: var(--accent);
 }
 
-.meteogram-panel {
-  margin-bottom: 12px;
+.ensemble-panel {
+  flex: 1;
+  min-height: 0;
+  margin-bottom: 0;
+  display: flex;
 }
 
-.meteogram-panel .section-label {
-  margin-bottom: 4px;
+.ensemble-chart {
+  flex: 1;
+  min-height: 280px;
 }
 
-.meteogram-loading {
+.ensemble-loading,
+.ensemble-empty {
   display: flex;
   align-items: center;
   justify-content: center;
   padding: 40px;
-}
-
-.meteogram-empty {
-  padding: 40px;
-  text-align: center;
   color: var(--text-muted);
   font-size: 13px;
 }
 
 @media (max-width: 768px) {
-  .meteogram {
+  .ensemble-plume {
     left: 0;
     top: 0;
     right: auto;
     bottom: auto;
     width: 100%;
-    max-height: 70vh;
+    max-height: 72vh;
     border-radius: 0 0 12px 12px;
   }
 }

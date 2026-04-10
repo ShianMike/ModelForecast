@@ -1,0 +1,69 @@
+.sounding-profile {
+  position: absolute;
+  left: 12px;
+  top: 12px;
+  width: min(1200px, calc(100vw - 360px));
+  height: min(750px, calc(100% - 24px));
+  overflow: hidden;
+  z-index: 1001;
+  padding: 10px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.25);
+  display: flex;
+  flex-direction: column;
+}
+
+.sounding-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  margin-bottom: 6px;
+  font-size: 12px;
+  color: var(--text-primary);
+  flex-shrink: 0;
+}
+
+.sounding-loading,
+.sounding-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 40px;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+/* ── Full plot image view ───────────────────────────── */
+.sounding-plot-view {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.sounding-plot-img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  border-radius: 4px;
+}
+
+.sounding-profile.sounding-collapsed {
+  height: auto;
+  width: auto;
+  min-width: 280px;
+}
+
+@media (max-width: 768px) {
+  .sounding-profile {
+    left: 0;
+    top: 0;
+    bottom: auto;
+    width: 100%;
+    max-height: 70vh;
+    border-radius: 0 0 8px 8px;
+  }
+}

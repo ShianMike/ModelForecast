@@ -42,6 +42,7 @@ PARAMETER_CATEGORIES = {
             "wind_speed_250hPa":          {"name": "250mb Wind",    "unit": "kt",  "cmap": "jet"},
             "wind_speed_500hPa":          {"name": "500mb Wind",    "unit": "kt",  "cmap": "wind"},
             "wind_speed_850hPa":          {"name": "850mb Wind",    "unit": "kt",  "cmap": "wind"},
+            "thickness_1000_500":         {"name": "1000‑500mb Thickness", "unit": "dam", "cmap": "thickness", "derived": True},
         },
     },
     "severe": {
@@ -51,6 +52,16 @@ PARAMETER_CATEGORIES = {
             "convective_inhibition": {"name": "CIN",              "unit": "J/kg", "cmap": "cin"},
             "wind_gusts_10m":        {"name": "Wind Gusts",       "unit": "kt",   "cmap": "wind"},
             "visibility":            {"name": "Visibility",       "unit": "m",    "cmap": "wind"},
+            "effective_bulk_shear":  {"name": "Eff. Bulk Shear",  "unit": "kt",   "cmap": "shear", "derived": True},
+        },
+    },
+    "severe_combo": {
+        "label": "Severe Composites",
+        "params": {
+            "stp_approx":              {"name": "STP (Sig Tornado)",        "unit": "",  "cmap": "stp",               "derived": True},
+            "scp":                     {"name": "SCP (Supercell)",          "unit": "",  "cmap": "scp",               "derived": True},
+            "ship":                    {"name": "SHIP (Sig Hail)",          "unit": "",  "cmap": "ship",              "derived": True},
+            "critical_angle_composite": {"name": "Tornado Composite",      "unit": "",  "cmap": "tornado_composite", "derived": True},
         },
     },
 }
@@ -79,7 +90,7 @@ def list_parameters():
 
     filtered = {}
     for cat_key, cat in PARAMETER_CATEGORIES.items():
-        params = {k: v for k, v in cat["params"].items() if k in supported}
+        params = {k: v for k, v in cat["params"].items() if k in supported or v.get("derived")}
         if params:
             filtered[cat_key] = {"label": cat["label"], "params": params}
     return jsonify(filtered)

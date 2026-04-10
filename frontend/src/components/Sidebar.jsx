@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Map, Layers, Wind, CloudRain, Globe, Zap, Cloud, Compass, Navigation, RefreshCw, Snowflake, Leaf, ExternalLink } from "lucide-react";
+import { Map, Layers, Wind, CloudRain, Globe, Zap, Cloud, Compass, Navigation, RefreshCw, Snowflake, Leaf, ExternalLink, Plus, Trash2 } from "lucide-react";
 import ParameterPicker from "./ParameterPicker";
 import "./Sidebar.css";
 
@@ -19,8 +19,10 @@ export default function Sidebar({
   selectedModel, setSelectedModel,
   selectedParam, setSelectedParam,
   region, setRegion, regions,
+  onSaveRegion, onDeleteRegion,
 }) {
   const [tab, setTab] = useState("models");
+  const [saveName, setSaveName] = useState("");
 
   return (
     <aside className="sidebar">
@@ -90,14 +92,42 @@ export default function Sidebar({
             <div className="section-label">Region Presets</div>
             <div className="region-grid">
               {Object.entries(regions).map(([key, r]) => (
-                <button
-                  key={key}
-                  className={`btn ${region === key ? "active" : ""}`}
-                  onClick={() => setRegion(key)}
-                >
-                  {r.label}
-                </button>
+                <div key={key} className="region-item">
+                  <button
+                    className={`btn ${region === key ? "active" : ""}`}
+                    onClick={() => setRegion(key)}
+                    style={{ flex: 1 }}
+                  >
+                    {r.label}
+                  </button>
+                  {r.custom && (
+                    <button
+                      className="btn-icon region-delete"
+                      onClick={() => onDeleteRegion(key)}
+                      title="Delete custom region"
+                    >
+                      <Trash2 size={12} />
+                    </button>
+                  )}
+                </div>
               ))}
+            </div>
+            <div className="section-label" style={{ marginTop: 12 }}>Save Current View</div>
+            <div className="region-save-row">
+              <input
+                className="input"
+                placeholder="Region name…"
+                value={saveName}
+                onChange={e => setSaveName(e.target.value)}
+                onKeyDown={e => { if (e.key === "Enter" && saveName.trim()) { onSaveRegion(saveName.trim()); setSaveName(""); } }}
+              />
+              <button
+                className="btn btn-primary"
+                disabled={!saveName.trim()}
+                onClick={() => { onSaveRegion(saveName.trim()); setSaveName(""); }}
+              >
+                <Plus size={14} />
+              </button>
             </div>
           </div>
         )}
