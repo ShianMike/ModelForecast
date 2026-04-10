@@ -9,7 +9,7 @@ $DIST = Join-Path $FRONTEND "dist"
 
 Write-Host "Building frontend..." -ForegroundColor Cyan
 Set-Location $FRONTEND
-$env:VITE_API_URL = "https://model-forecast-omtebvnjea-uc.a.run.app"
+$env:VITE_API_URL = "https://model-forecast-693545589581.us-central1.run.app"
 npm run build
 Remove-Item env:\VITE_API_URL
 
