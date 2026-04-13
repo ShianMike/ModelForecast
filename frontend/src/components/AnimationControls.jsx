@@ -1,31 +1,15 @@
 import { useEffect, useMemo } from "react";
 import { Play, Pause, SkipBack, SkipForward, ChevronLeft, ChevronRight } from "lucide-react";
 import "./AnimationControls.css";
+import { validZuluLabel } from "../timeUtils";
 
 const SPEEDS = [0.5, 1, 2, 4];
-
-/* Compute valid date/time label from current UTC + forecast hour offset */
-function validZuluLabel(fhour, validTime) {
-  /* If backend already gave a real date string (not just "Fxxx"), use it */
-  if (validTime && !/^F\d+$/.test(validTime)) return validTime;
-  /* Otherwise compute: assume latest model init = most recent 00/06/12/18Z */
-  const now = new Date();
-  const utcH = now.getUTCHours();
-  const initH = utcH >= 18 ? 18 : utcH >= 12 ? 12 : utcH >= 6 ? 6 : 0;
-  const init = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), initH));
-  const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-  const valid = new Date(init.getTime() + fhour * 3600_000);
-  const wday = DAYS[valid.getUTCDay()];
-  const mon = String(valid.getUTCMonth() + 1).padStart(2, "0");
-  const day = String(valid.getUTCDate()).padStart(2, "0");
-  const hh = String(valid.getUTCHours()).padStart(2, "0");
-  return `${wday} ${mon}/${day} ${hh}Z`;
-}
 
 export default function AnimationControls({
   fhour, setFhour, maxFhour, step,
   playing, setPlaying,
   speed, setSpeed,
+  run,
   validTime, loading,
 }) {
   const stepBack = () => setFhour(h => Math.max(0, h - step));
@@ -71,7 +55,7 @@ export default function AnimationControls({
     return () => window.removeEventListener("keydown", onKey);
   }, [step, maxFhour, setFhour, setPlaying]);
 
-  const zuluLabel = useMemo(() => validZuluLabel(fhour, validTime), [fhour, validTime]);
+  const zuluLabel = useMemo(() => validZuluLabel(fhour, validTime, run), [fhour, validTime, run]);
 
   return (
     <div className="anim-controls">

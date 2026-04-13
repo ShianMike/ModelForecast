@@ -5,7 +5,7 @@ import "./SoundingProfile.css";
 
 const SA_URL = "https://shianmike.github.io/SoundingAnalysis/";
 
-export default function SoundingProfile({ plot, loading, point, model, onClose }) {
+export default function SoundingProfile({ plot, loading, point, model, fhour = 0, onClose }) {
   const { offset, handleMouseDown } = useDraggable();
   const [collapsed, setCollapsed] = useState(false);
   const dragStyle = { transform: `translate(${offset.x}px, ${offset.y}px)` };
@@ -13,13 +13,13 @@ export default function SoundingProfile({ plot, loading, point, model, onClose }
   const handleDownload = () => {
     if (!plot?.image) return;
     const link = document.createElement("a");
-    link.download = `sounding_${model}_F${String(plot.meta?.fhour ?? 0).padStart(3, "0")}_${point?.lat?.toFixed(2)}N_${point?.lon?.toFixed(2)}W.png`;
+    link.download = `sounding_${model}_F${String(fhour).padStart(3, "0")}_${point?.lat?.toFixed(2)}N_${point?.lon?.toFixed(2)}W.png`;
     link.href = `data:image/png;base64,${plot.image}`;
     link.click();
   };
 
   const saLink = point
-    ? `${SA_URL}?source=psu&lat=${point.lat.toFixed(2)}&lon=${point.lon.toFixed(2)}&model=${model || "gfs"}&fhour=${plot?.meta?.fhour ?? 0}`
+    ? `${SA_URL}?source=psu&lat=${point.lat.toFixed(2)}&lon=${point.lon.toFixed(2)}&model=${model || "gfs"}&fhour=${fhour}`
     : null;
 
   if (loading) {
@@ -50,7 +50,7 @@ export default function SoundingProfile({ plot, loading, point, model, onClose }
     <div className={`sounding-profile sounding-profile--wide card fade-in${collapsed ? " sounding-collapsed" : ""}`} style={dragStyle}>
       <div className="sounding-header drag-handle" onMouseDown={handleMouseDown}>
         <div>
-          <strong>{model?.toUpperCase()}</strong> Sounding — F{String(plot.meta?.fhour ?? "000").padStart(3, "0")}
+          <strong>{model?.toUpperCase()}</strong> Sounding — F{String(fhour).padStart(3, "0")}
           <br />
           <span className="mono" style={{ fontSize: 11 }}>
             {point?.lat?.toFixed(2)}°N, {point?.lon?.toFixed(2)}°W

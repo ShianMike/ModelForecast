@@ -26,6 +26,7 @@ Thumbs.db
 # Dev artifacts
 STYLING_PROMPT.txt
 implementation_plan.md
+.instructions.md
 
 # Old static build artifacts
 static/

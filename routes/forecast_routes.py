@@ -948,6 +948,11 @@ def _get_supported(model):
     return open_meteo.get_supported_variables(model)
 
 
+def _allow_open_meteo_fallback(model):
+    """HRRR should stay on GRIB sources to avoid Open-Meteo 429 bursts."""
+    return model.lower() != "hrrr"
+
+
 # Derived composite parameter definitions
 COMPOSITE_PARAMS = {
     "effective_bulk_shear": {
@@ -991,6 +996,8 @@ def _fetch_grid(model, variable, fhour, bbox):
             return aws_grib.fetch_grid_forecast(model, variable, fhour, bbox)
         except Exception:
             pass
+    if not _allow_open_meteo_fallback(model):
+        raise RuntimeError(f"No GRIB source available for {model}/{variable} at F{fhour:03d}")
     return open_meteo.fetch_grid_forecast(model, variable, fhour, bbox)
 
 
@@ -1261,6 +1268,13 @@ def get_forecast():
                     grids[comp_var] = _fetch_grid(model, fetch_var, fhour, bbox)
             compute_fn = globals()[comp["compute"]]
             result = compute_fn(grids, fhour)
+            # Preserve timing metadata from source grids so frontend time labels stay synced.
+            first_grid = next(iter(grids.values()), None)
+            if isinstance(first_grid, dict):
+                if "run" not in result and first_grid.get("run"):
+                    result["run"] = first_grid["run"]
+                if "valid_time" not in result and first_grid.get("valid_time"):
+                    result["valid_time"] = first_grid["valid_time"]
             result = _nan_safe(result)
             return jsonify(result)
         except RateLimitError:
@@ -1288,8 +1302,10 @@ def get_forecast():
             except Exception as e:
                 log.info("AWS failed for %s/%s: %s — trying Open-Meteo", model, variable, e)
 
-        if result is None:
+        if result is None and _allow_open_meteo_fallback(model):
             result = open_meteo.fetch_grid_forecast(model, variable, fhour, bbox)
+        if result is None:
+            raise RuntimeError(f"No GRIB source available for {model}/{variable} at F{fhour:03d}")
 
         result = _nan_safe(result)
         return jsonify(result)
@@ -1355,6 +1371,9 @@ def get_meteogram():
                 return jsonify(result)
             except Exception as e:
                 log.info("AWS GRIB meteogram failed for %s via %s: %s - trying Open-Meteo", model, aws_model, e)
+
+        if not _allow_open_meteo_fallback(model):
+            raise RuntimeError(f"No GRIB source available for meteogram {model}")
 
         om_model = "gfs" if nomads.is_nomads_model(model) else model
         candidates = [om_model] + [m for m in ("ecmwf", "icon", "gem", "jma", "gfs") if m != om_model]
@@ -1439,6 +1458,9 @@ def get_sounding():
                 return jsonify(result)
             except Exception as e:
                 log.info("AWS GRIB sounding failed for %s via %s: %s - trying Open-Meteo", model, aws_model, e)
+
+        if not _allow_open_meteo_fallback(model):
+            raise RuntimeError(f"No GRIB source available for sounding {model} at F{fhour:03d}")
 
         # Open-Meteo fallback for non-NOMADS models or GRIB failure
         levels = _SOUNDING_LEVELS

@@ -19,18 +19,15 @@ FRONTEND_DIR = os.path.join(os.path.dirname(__file__), "frontend", "dist")
 # ─── Allowed origins ───────────────────────────────────────
 ALLOWED_ORIGINS = [
     "https://shianmike.github.io",
+    "http://localhost:3000",
+    "http://localhost:3001",
+    "http://localhost:3002",
+    "http://localhost:5001",
+    "http://127.0.0.1:3000",
+    "http://127.0.0.1:3001",
+    "http://127.0.0.1:3002",
+    "http://127.0.0.1:5001",
 ]
-if os.environ.get("FLASK_DEBUG") or os.environ.get("FLASK_ENV") == "development" or not os.environ.get("K_SERVICE"):
-    ALLOWED_ORIGINS += [
-        "http://localhost:3000",
-        "http://localhost:3001",
-        "http://localhost:3002",
-        "http://localhost:5001",
-        "http://127.0.0.1:3000",
-        "http://127.0.0.1:3001",
-        "http://127.0.0.1:3002",
-        "http://127.0.0.1:5001",
-    ]
 
 app = Flask(__name__, static_folder=FRONTEND_DIR, static_url_path="")
 

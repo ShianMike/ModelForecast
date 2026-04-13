@@ -8,6 +8,7 @@ import Meteogram from "./components/Meteogram";
 import SoundingProfile from "./components/SoundingProfile";
 import CrossSection from "./components/CrossSection";
 import EnsemblePlume from "./components/EnsemblePlume";
+import { validZuluLabel } from "./timeUtils";
 
 import { fetchModels, fetchParameters, fetchForecast, fetchColorScale, fetchMeteogram, fetchSoundingPlot, fetchCrossSection, fetchEnsemble } from "./api";
 
@@ -232,21 +233,7 @@ export default function App() {
       /* ── Bottom-left: model + valid time ─────────────────── */
       const modelLabel = selectedModel?.toUpperCase() || "";
       const fhourLabel = `F${String(fhour).padStart(3, "0")}`;
-      /* Compute Zulu date/time from nearest init cycle + fhour */
-      let zuluLabel = "";
-      {
-        const now = new Date();
-        const utcH = now.getUTCHours();
-        const initH = utcH >= 18 ? 18 : utcH >= 12 ? 12 : utcH >= 6 ? 6 : 0;
-        const init = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), initH));
-        const valid = new Date(init.getTime() + fhour * 3600_000);
-        const days = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
-        const wd = days[valid.getUTCDay()];
-        const mm = String(valid.getUTCMonth() + 1).padStart(2, "0");
-        const dd = String(valid.getUTCDate()).padStart(2, "0");
-        const hh = String(valid.getUTCHours()).padStart(2, "0");
-        zuluLabel = `${wd} ${mm}/${dd} ${hh}Z`;
-      }
+      const zuluLabel = validZuluLabel(fhour, gridData?.valid_time, gridData?.run);
       const stampText = `${modelLabel}  ${fhourLabel}  ${zuluLabel}`;
       const stampFontSize = Math.round(13 * scale);
       ctx.font = `bold ${stampFontSize}px "SF Mono", "Cascadia Code", "Consolas", monospace`;
@@ -686,8 +673,11 @@ export default function App() {
     return () => clearInterval(animRef.current);
   }, [playing, animSpeed, fhourStep, maxFhour]);
 
-  /* ── Compute valid time label ──────────────────────────── */
-  const validTimeLabel = gridData?.valid_time || `F${String(fhour).padStart(3, "0")}`;
+  /* ── Compute display time labels (shared formatter) ────── */
+  const validTimeLabel = validZuluLabel(fhour, gridData?.valid_time, gridData?.run);
+  const compareValidTimeLabel = compareGridData
+    ? validZuluLabel(fhour, compareGridData?.valid_time, compareGridData?.run)
+    : validTimeLabel;
 
   /* ── Difference mode: compute delta from previous frame ── */
   const displayGridData = useMemo(() => {
@@ -819,7 +809,7 @@ export default function App() {
               bbox={bbox}
               parameter={selectedParam}
               overlayOpacity={overlayOpacity}
-              validTime={compareGridData?.valid_time || validTimeLabel}
+              validTime={compareValidTimeLabel}
               model={compareModel}
               showContours={showContours}
             />
@@ -840,6 +830,7 @@ export default function App() {
               loading={soundingLoading}
               point={meteogramPoint}
               model={selectedModel}
+              fhour={fhour}
               onClose={() => setActivePanel(null)}
             />
           )}
@@ -871,7 +862,8 @@ export default function App() {
             setPlaying={setPlaying}
             speed={animSpeed}
             setSpeed={setAnimSpeed}
-            validTime={validTimeLabel}
+            run={gridData?.run}
+            validTime={gridData?.valid_time}
             loading={gridLoading}
           />
         </div>
