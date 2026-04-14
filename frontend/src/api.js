@@ -125,11 +125,12 @@ export async function fetchSounding({ model, lat, lon, fhour }) {
 }
 
 /* Full sounding plot from Sounding Analysis project */
-export async function fetchSoundingPlot({ model, lat, lon, fhour, theme, colorblind }) {
+export async function fetchSoundingPlot({ model, lat, lon, fhour, theme, colorblind, run }) {
   const params = new URLSearchParams({
     model, lat: String(lat), lon: String(lon), fhour: String(fhour || 0),
     theme: theme || "dark", colorblind: String(!!colorblind),
   });
+  if (run) params.set("run", String(run));
   const res = await fetchWithTimeout(`${API_BASE}/api/sounding-plot?${params}`, {}, 65000);
   const data = await res.json();
   if (!res.ok) throw new Error(data.error || "Sounding plot fetch failed");

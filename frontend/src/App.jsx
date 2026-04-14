@@ -417,14 +417,22 @@ export default function App() {
     setSoundingLoading(true);
     setSoundingPlot(null);
     try {
-      const plot = await fetchSoundingPlot({ model: selectedModel, lat, lon, fhour, theme, colorblind });
+      const plot = await fetchSoundingPlot({
+        model: selectedModel,
+        lat,
+        lon,
+        fhour,
+        theme,
+        colorblind,
+        run: gridData?.run,
+      });
       setSoundingPlot(plot);
     } catch {
       setSoundingPlot(null);
     } finally {
       setSoundingLoading(false);
     }
-  }, [selectedModel, fhour, theme, colorblind]);
+  }, [selectedModel, fhour, theme, colorblind, gridData?.run]);
 
   const loadEnsembleForPoint = useCallback(async (lat, lon) => {
     setEnsembleLoading(true);

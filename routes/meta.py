@@ -51,6 +51,7 @@ PARAMETER_CATEGORIES = {
             "cape":                  {"name": "SB CAPE",          "unit": "J/kg", "cmap": "cape"},
             "convective_inhibition": {"name": "CIN",              "unit": "J/kg", "cmap": "cin"},
             "wind_gusts_10m":        {"name": "Wind Gusts",       "unit": "kt",   "cmap": "wind"},
+            "simulated_reflectivity": {"name": "Simulated Reflectivity (SimRef)", "unit": "dBZ", "cmap": "reflectivity"},
             "visibility":            {"name": "Visibility",       "unit": "m",    "cmap": "wind"},
             "effective_bulk_shear":  {"name": "Eff. Bulk Shear",  "unit": "kt",   "cmap": "shear", "derived": True},
         },

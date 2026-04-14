@@ -129,6 +129,12 @@ NOMADS_VARIABLE_MAP = {
             "nam": ["var_TCDC", "lev_entire_atmosphere_%28considered_as_a_single_layer%29"],
         },
     },
+    "simulated_reflectivity": {
+        "grib_params": ["var_REFC", "lev_entire_atmosphere"],
+        "wind": False,
+        "convert": None,
+        "unit": "dBZ",
+    },
     "visibility": {
         "grib_params": ["var_VIS", "lev_surface"],
         "wind": False,
@@ -182,7 +188,9 @@ NOMADS_VARIABLE_MAP = {
 # Per-model variable support
 NOMADS_SUPPORTED_VARS = {
     "gfs": set(NOMADS_VARIABLE_MAP.keys()),
-    "nam": set(NOMADS_VARIABLE_MAP.keys()),
+    "nam": set(NOMADS_VARIABLE_MAP.keys()) - {
+        "simulated_reflectivity",  # Not consistently available on NAM endpoint
+    },
     "rap": set(NOMADS_VARIABLE_MAP.keys()) - {
         "shortwave_radiation",  # DSWRF not available on RAP
     },

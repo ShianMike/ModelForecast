@@ -110,6 +110,12 @@ AWS_VARIABLE_MAP = {
         "unit": "%",
         "wind": False,
     },
+    "simulated_reflectivity": {
+        "search": r":REFC:entire atmosphere:",
+        "convert": None,
+        "unit": "dBZ",
+        "wind": False,
+    },
     "visibility": {
         "search": r":VIS:surface:",
         "convert": None,
