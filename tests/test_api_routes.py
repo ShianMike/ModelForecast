@@ -121,6 +121,33 @@ class ApiRouteTests(unittest.TestCase):
             {"error": "Failed to fetch forecast data from upstream providers."},
         )
 
+    def test_forecast_hrrr_does_not_fallback_to_open_meteo_when_grib_sources_fail(self):
+        with patch("routes.forecast_routes.run_cache.is_enabled", return_value=False), patch(
+            "routes.forecast_routes.nomads.fetch_grid_forecast",
+            side_effect=FileNotFoundError("nomads file missing"),
+        ), patch(
+            "routes.forecast_routes.aws_grib.fetch_grid_forecast",
+            side_effect=FileNotFoundError("aws file missing"),
+        ), patch(
+            "routes.forecast_routes.open_meteo.fetch_grid_forecast",
+            side_effect=AssertionError("open-meteo fallback should not run"),
+        ) as om_fetch:
+            response = self.client.get(
+                "/api/forecast",
+                query_string={
+                    "model": "hrrr",
+                    "variable": "temperature_2m",
+                    "fhour": "17",
+                },
+            )
+
+        self.assertEqual(response.status_code, 502)
+        self.assertEqual(
+            response.get_json(),
+            {"error": "Failed to fetch forecast data from upstream providers."},
+        )
+        om_fetch.assert_not_called()
+
     def test_forecast_serves_persistent_cache_when_entry_matches_run(self):
         cached_payload = {
             "model": "gfs",

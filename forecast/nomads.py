@@ -278,13 +278,35 @@ def _find_latest_run(model="gfs"):
     return date_str, run_cycle
 
 
+def _iter_run_candidates(model, max_candidates=6):
+    """Yield latest run followed by earlier valid cycles for backtracking."""
+    latest_date, latest_cycle = _find_latest_run(model)
+    cycles = set(NOMADS_MODELS[model]["cycles"])
+
+    cursor = datetime.strptime(f"{latest_date}{latest_cycle:02d}", "%Y%m%d%H").replace(
+        tzinfo=timezone.utc
+    )
+    seen = set()
+    out = []
+
+    while len(out) < max_candidates:
+        key = (cursor.strftime("%Y%m%d"), cursor.hour)
+        if cursor.hour in cycles and key not in seen:
+            out.append(key)
+            seen.add(key)
+        cursor -= timedelta(hours=1)
+
+    return out
+
+
 # ─── GRIB filter URL builder ──────────────────────────────
 
-def _build_filter_url(model, variable, forecast_hour, bbox):
+def _build_filter_url(model, variable, forecast_hour, bbox, run_date=None, run_cycle=None):
     """Construct the full NOMADS GRIB filter URL."""
     config = NOMADS_MODELS[model]
     var_info = NOMADS_VARIABLE_MAP[variable]
-    run_date, run_cycle = _find_latest_run(model)
+    if run_date is None or run_cycle is None:
+        run_date, run_cycle = _find_latest_run(model)
 
     parts = [
         config["filter_url"],
@@ -405,14 +427,36 @@ def fetch_grid_forecast(model, variable, forecast_hour, bbox=None):
         _cache_set(cache_key, result)
         return result
 
-    url, run_date, run_cycle = _build_filter_url(
-        model_key, variable, forecast_hour, bbox
-    )
+    lats = lons = raw_values = u_raw = v_raw = None
+    run_date = run_cycle = None
+    last_missing = None
 
-    grib_bytes = _download_grib(url)
-    lats, lons, raw_values, u_raw, v_raw = _decode_and_combine(
-        grib_bytes, is_wind=var_info["wind"]
-    )
+    for cand_date, cand_cycle in _iter_run_candidates(model_key, max_candidates=6):
+        try:
+            url, run_date, run_cycle = _build_filter_url(
+                model_key,
+                variable,
+                forecast_hour,
+                bbox,
+                run_date=cand_date,
+                run_cycle=cand_cycle,
+            )
+            grib_bytes = _download_grib(url)
+            lats, lons, raw_values, u_raw, v_raw = _decode_and_combine(
+                grib_bytes, is_wind=var_info["wind"]
+            )
+            break
+        except FileNotFoundError as exc:
+            last_missing = exc
+            continue
+
+    if lats is None or lons is None or raw_values is None or run_date is None or run_cycle is None:
+        if last_missing is not None:
+            raise last_missing
+        raise RuntimeError(
+            f"NOMADS data unavailable for {model_key}/{variable} at F{forecast_hour:03d}"
+        )
+
     assert lats is not None and lons is not None
 
     # Convert longitude 0-360 → -180..180

@@ -260,10 +260,34 @@ def _find_latest_run(model):
     return result
 
 
-def _build_url(model, forecast_hour):
+def _iter_run_candidates(model, max_candidates=6):
+    """Yield latest run followed by earlier valid cycles for backtracking."""
+    latest_date, latest_cycle = _find_latest_run(model)
+    cycles = set(AWS_MODELS[model]["cycles"])
+
+    cursor = datetime.strptime(f"{latest_date}{latest_cycle:02d}", "%Y%m%d%H").replace(
+        tzinfo=timezone.utc
+    )
+    seen = set()
+    out = []
+
+    while len(out) < max_candidates:
+        key = (cursor.strftime("%Y%m%d"), cursor.hour)
+        if cursor.hour in cycles and key not in seen:
+            out.append(key)
+            seen.add(key)
+        cursor -= timedelta(hours=1)
+
+    return out
+
+
+def _build_url(model, forecast_hour, run_date=None, run_cycle=None):
     """Build the S3 URL for a GRIB2 file."""
     config = AWS_MODELS[model]
-    date_str, cycle = _find_latest_run(model)
+    if run_date is None or run_cycle is None:
+        date_str, cycle = _find_latest_run(model)
+    else:
+        date_str, cycle = run_date, run_cycle
     path = config["path_pattern"].format(
         date=date_str, cycle=cycle, fhour=forecast_hour
     )
@@ -377,11 +401,33 @@ def fetch_grid_forecast(model, variable, forecast_hour, bbox=None):
         # Fall through to caller — they'll handle zeros
         raise FileNotFoundError("Accumulated fields not available at f000")
 
-    url, run_date, run_cycle = _build_url(model_key, forecast_hour)
+    url = None
+    run_date = run_cycle = None
+    idx_entries = None
+    grib_bytes = None
+    last_missing = None
 
-    # Fetch index and download just the bytes we need
-    idx_entries = _fetch_idx(url)
-    grib_bytes = _download_variable(url, idx_entries, var_info)
+    for cand_date, cand_cycle in _iter_run_candidates(model_key, max_candidates=6):
+        try:
+            url, run_date, run_cycle = _build_url(
+                model_key,
+                forecast_hour,
+                run_date=cand_date,
+                run_cycle=cand_cycle,
+            )
+            idx_entries = _fetch_idx(url)
+            grib_bytes = _download_variable(url, idx_entries, var_info)
+            break
+        except FileNotFoundError as exc:
+            last_missing = exc
+            continue
+
+    if grib_bytes is None or run_date is None or run_cycle is None:
+        if last_missing is not None:
+            raise last_missing
+        raise RuntimeError(
+            f"AWS data unavailable for {model_key}/{variable} at F{forecast_hour:03d}"
+        )
 
     # Decode GRIB2
     messages = decode_grib2(grib_bytes)

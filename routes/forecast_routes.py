@@ -5,6 +5,7 @@ for GFS, NAM, RAP, and HRRR. Ensemble data remains on Open-Meteo.
 """
 import math
 import logging
+import re
 import time
 import threading
 from datetime import datetime, timedelta
@@ -1294,11 +1295,13 @@ def _fetch_grid(model, variable, fhour, bbox):
             return nomads.fetch_grid_forecast(model, variable, fhour, bbox)
         except Exception as exc:
             log.info("NOMADS failed for %s/%s at fhour %s: %s", model, variable, fhour, exc)
+
     if aws_grib.is_aws_model(model):
         try:
             return aws_grib.fetch_grid_forecast(model, variable, fhour, bbox)
         except Exception as exc:
             log.info("AWS failed for %s/%s at fhour %s: %s", model, variable, fhour, exc)
+
     raise RuntimeError(f"No GRIB source available for {model}/{variable} at F{fhour:03d}")
 
 
@@ -1723,11 +1726,20 @@ def get_sounding_plot():
         fhour = _snap_sounding_fhour(model, fhour_raw)
         theme = request.args.get("theme", "dark")
         colorblind = request.args.get("colorblind", "false").lower() == "true"
+        run_token = request.args.get("run")
         lat, lon = parse_lat_lon(request.args)
     except QueryValidationError as exc:
         return json_error(str(exc), exc.status_code)
 
-    cache_key = f"sndplot:{model}:{fhour}:{round(lat, 3)}:{round(lon, 3)}:{theme}"
+    run_date_token = None
+    if run_token:
+        m = re.match(r"^(\d{8})\/(\d{2})z$", str(run_token).strip(), flags=re.IGNORECASE)
+        if m:
+            run_date_token = f"{m.group(1)}{m.group(2)}"
+
+    cache_key = (
+        f"sndplot:{model}:{fhour}:{round(lat, 3)}:{round(lon, 3)}:{theme}:{run_date_token or 'auto'}"
+    )
     cached = _plot_cache_get(cache_key)
     if cached is not None:
         return jsonify(cached)
@@ -1748,6 +1760,8 @@ def get_sounding_plot():
         "colorblind": colorblind,
         "mapZoom": 2.0,
     }
+    if run_date_token:
+        payload["date"] = run_date_token
 
     try:
         resp = http_requests.post(_SOUNDING_API, json=payload, timeout=60)
