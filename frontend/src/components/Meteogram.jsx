@@ -63,10 +63,20 @@ export default function Meteogram({ data, loading, point, model, onClose }) {
     return (
       <div className="meteogram card fade-in" style={dragStyle}>
         <div className="meteogram-header drag-handle" onMouseDown={handleMouseDown}>
-          <span>Loading meteogram…</span>
+          <span>Preparing Meteogram</span>
           <button className="btn-icon" onClick={onClose}><X size={14} /></button>
         </div>
-        <div className="meteogram-loading"><div className="spinner" /></div>
+        <div className="meteogram-skeleton" aria-hidden="true">
+          <div className="meteogram-skeleton-toolbar">
+            <div className="meteogram-skeleton-pill skeleton" />
+            <div className="meteogram-skeleton-pill skeleton" />
+            <div className="meteogram-skeleton-pill skeleton" />
+            <div className="meteogram-skeleton-pill skeleton" />
+          </div>
+          <div className="meteogram-skeleton-panel skeleton"><div className="meteogram-skeleton-grid" /></div>
+          <div className="meteogram-skeleton-panel skeleton"><div className="meteogram-skeleton-grid" /></div>
+          <div className="meteogram-skeleton-panel skeleton"><div className="meteogram-skeleton-grid" /></div>
+        </div>
       </div>
     );
   }

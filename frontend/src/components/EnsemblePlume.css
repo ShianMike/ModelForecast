@@ -74,6 +74,57 @@
   font-size: 13px;
 }
 
+.ensemble-skeleton {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto auto 1fr;
+  gap: 10px;
+}
+
+.ensemble-skeleton-head {
+  display: grid;
+  grid-template-columns: 1fr 0.6fr;
+  gap: 8px;
+}
+
+.ensemble-skeleton-line {
+  height: 12px;
+}
+
+.ensemble-skeleton-toolbar {
+  display: flex;
+  gap: 6px;
+}
+
+.ensemble-skeleton-pill {
+  width: 42px;
+  height: 18px;
+}
+
+.ensemble-skeleton-chart {
+  position: relative;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.ensemble-skeleton-grid {
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(to right, rgba(255, 255, 255, 0.08) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(255, 255, 255, 0.08) 1px, transparent 1px),
+    linear-gradient(110deg, transparent 30%, rgba(255, 255, 255, 0.22) 50%, transparent 70%);
+  background-size: 32px 32px, 32px 32px, 220% 100%;
+  animation: ensemble-shimmer 1.9s linear infinite;
+}
+
+@keyframes ensemble-shimmer {
+  0% { background-position: 0 0, 0 0, 200% 0; }
+  100% { background-position: 0 0, 0 0, -120% 0; }
+}
+
 @media (max-width: 768px) {
   .ensemble-plume {
     left: 0;

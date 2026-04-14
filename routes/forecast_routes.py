@@ -1847,63 +1847,76 @@ def get_ensemble():
         selected = None
 
         for candidate_var in candidate_variables:
-            om_var = open_meteo.VARIABLE_MAP.get(candidate_var, candidate_var)
-            params = {
-                "latitude": round(lat, 4),
-                "longitude": round(lon, 4),
-                "hourly": om_var,
-                "temperature_unit": "fahrenheit",
-                "wind_speed_unit": "kn",
-                "precipitation_unit": "inch",
-            }
-            resp = open_meteo._request_with_retry(
-                "https://ensemble-api.open-meteo.com/v1/ensemble",
-                params={**params, "models": "gfs_seamless"},
-                timeout=20,
-            )
-            resp.raise_for_status()
+            try:
+                om_var = open_meteo.VARIABLE_MAP.get(candidate_var, candidate_var)
+                params = {
+                    "latitude": round(lat, 4),
+                    "longitude": round(lon, 4),
+                    "hourly": om_var,
+                    "temperature_unit": "fahrenheit",
+                    "wind_speed_unit": "kn",
+                    "precipitation_unit": "inch",
+                }
+                resp = open_meteo._request_with_retry(
+                    "https://ensemble-api.open-meteo.com/v1/ensemble",
+                    params={**params, "models": "gfs_seamless"},
+                    timeout=20,
+                )
+                resp.raise_for_status()
 
-            data = resp.json()
-            hourly = data.get("hourly", {})
-            times = hourly.get("time", [])
+                data = resp.json()
+                hourly = data.get("hourly", {})
+                times = hourly.get("time", [])
 
-            members = []
-            for key, vals in hourly.items():
-                if key.startswith(om_var + "_member"):
-                    members.append(vals)
+                members = []
+                for key, vals in hourly.items():
+                    if key.startswith(om_var + "_member"):
+                        members.append(vals)
 
-            if not members:
+                if not members:
+                    continue
+
+                arr = np.asarray(members, dtype=float)
+                if arr.size == 0:
+                    continue
+
+                valid_ratio = float(np.isfinite(arr).mean())
+                is_last_candidate = candidate_var == candidate_variables[-1]
+                if valid_ratio < 0.12 and not is_last_candidate:
+                    continue
+
+                percentiles = {
+                    "p10": np.nanpercentile(arr, 10, axis=0).tolist(),
+                    "p25": np.nanpercentile(arr, 25, axis=0).tolist(),
+                    "p50": np.nanpercentile(arr, 50, axis=0).tolist(),
+                    "p75": np.nanpercentile(arr, 75, axis=0).tolist(),
+                    "p90": np.nanpercentile(arr, 90, axis=0).tolist(),
+                }
+
+                selected = {
+                    "variable": requested_variable,
+                    "source_variable": candidate_var,
+                    "lat": lat,
+                    "lon": lon,
+                    "times": times,
+                    "n_members": len(members),
+                    "members": members,
+                    "percentiles": percentiles,
+                    "valid_ratio": round(valid_ratio, 4),
+                }
+                break
+            except RateLimitError:
+                raise
+            except Exception as exc:
+                log.info(
+                    "Ensemble candidate failed for %s via %s at (%.3f, %.3f): %s",
+                    requested_variable,
+                    candidate_var,
+                    lat,
+                    lon,
+                    exc,
+                )
                 continue
-
-            arr = np.asarray(members, dtype=float)
-            if arr.size == 0:
-                continue
-
-            valid_ratio = float(np.isfinite(arr).mean())
-            is_last_candidate = candidate_var == candidate_variables[-1]
-            if valid_ratio < 0.12 and not is_last_candidate:
-                continue
-
-            percentiles = {
-                "p10": np.nanpercentile(arr, 10, axis=0).tolist(),
-                "p25": np.nanpercentile(arr, 25, axis=0).tolist(),
-                "p50": np.nanpercentile(arr, 50, axis=0).tolist(),
-                "p75": np.nanpercentile(arr, 75, axis=0).tolist(),
-                "p90": np.nanpercentile(arr, 90, axis=0).tolist(),
-            }
-
-            selected = {
-                "variable": requested_variable,
-                "source_variable": candidate_var,
-                "lat": lat,
-                "lon": lon,
-                "times": times,
-                "n_members": len(members),
-                "members": members,
-                "percentiles": percentiles,
-                "valid_ratio": round(valid_ratio, 4),
-            }
-            break
 
         if selected is None:
             return jsonify({"error": "No ensemble members found"}), 404

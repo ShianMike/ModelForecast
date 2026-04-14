@@ -65,6 +65,46 @@
   padding: 40px;
 }
 
+.meteogram-skeleton {
+  display: grid;
+  grid-template-rows: auto repeat(3, 1fr);
+  gap: 10px;
+  min-height: 420px;
+}
+
+.meteogram-skeleton-toolbar {
+  display: flex;
+  gap: 6px;
+}
+
+.meteogram-skeleton-pill {
+  width: 42px;
+  height: 18px;
+}
+
+.meteogram-skeleton-panel {
+  position: relative;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.meteogram-skeleton-grid {
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(to right, rgba(255, 255, 255, 0.08) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(255, 255, 255, 0.08) 1px, transparent 1px),
+    linear-gradient(110deg, transparent 30%, rgba(255, 255, 255, 0.22) 50%, transparent 70%);
+  background-size: 32px 32px, 32px 32px, 220% 100%;
+  animation: meteogram-shimmer 1.9s linear infinite;
+}
+
+@keyframes meteogram-shimmer {
+  0% { background-position: 0 0, 0 0, 200% 0; }
+  100% { background-position: 0 0, 0 0, -120% 0; }
+}
+
 .meteogram-empty {
   padding: 40px;
   text-align: center;

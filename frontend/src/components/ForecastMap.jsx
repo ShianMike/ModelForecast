@@ -50,6 +50,10 @@ export default function ForecastMap({ gridData, loading, error, bbox, parameter,
     const map = L.map(mapContainerRef.current, {
       center: [39, -98],
       zoom: 4,
+      minZoom: -2,
+      maxZoom: 20,
+      zoomSnap: 0.5,
+      zoomDelta: 0.5,
       zoomControl: false,
       attributionControl: false,
     });
@@ -58,6 +62,8 @@ export default function ForecastMap({ gridData, loading, error, bbox, parameter,
     const isDark = document.documentElement.getAttribute("data-theme") !== "light";
     tileRef.current = L.tileLayer(isDark ? DARK_TILES : LIGHT_TILES, {
       attribution: TILE_ATTR,
+      minNativeZoom: 0,
+      maxNativeZoom: 18,
       maxZoom: 18,
     }).addTo(map);
 

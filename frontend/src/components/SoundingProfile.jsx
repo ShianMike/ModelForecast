@@ -26,10 +26,25 @@ export default function SoundingProfile({ plot, loading, point, model, fhour = 0
     return (
       <div className="sounding-profile sounding-profile--wide card fade-in" style={dragStyle}>
         <div className="sounding-header drag-handle" onMouseDown={handleMouseDown}>
-          <span>Loading sounding…</span>
+          <span>Preparing Sounding</span>
           <button className="btn-icon" onClick={onClose}><X size={14} /></button>
         </div>
-        <div className="sounding-loading"><div className="spinner" /></div>
+        <div className="sounding-skeleton" aria-hidden="true">
+          <div className="sounding-skeleton-top">
+            <div className="sounding-skeleton-line skeleton" />
+            <div className="sounding-skeleton-line skeleton" />
+            <div className="sounding-skeleton-pill skeleton" />
+          </div>
+          <div className="sounding-skeleton-chart skeleton">
+            <div className="sounding-skeleton-grid" />
+          </div>
+          <div className="sounding-skeleton-bottom">
+            <div className="sounding-skeleton-chip skeleton" />
+            <div className="sounding-skeleton-chip skeleton" />
+            <div className="sounding-skeleton-chip skeleton" />
+            <div className="sounding-skeleton-chip skeleton" />
+          </div>
+        </div>
       </div>
     );
   }

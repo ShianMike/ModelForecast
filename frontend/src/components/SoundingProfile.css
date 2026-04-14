@@ -35,6 +35,64 @@
   font-size: 13px;
 }
 
+.sounding-skeleton {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  gap: 12px;
+}
+
+.sounding-skeleton-top {
+  display: grid;
+  grid-template-columns: 1fr 1fr auto;
+  gap: 8px;
+}
+
+.sounding-skeleton-line {
+  height: 12px;
+}
+
+.sounding-skeleton-pill {
+  width: 96px;
+  height: 12px;
+  justify-self: end;
+}
+
+.sounding-skeleton-chart {
+  position: relative;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.sounding-skeleton-grid {
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(to right, rgba(255, 255, 255, 0.08) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(255, 255, 255, 0.08) 1px, transparent 1px),
+    linear-gradient(110deg, transparent 30%, rgba(255, 255, 255, 0.22) 50%, transparent 70%);
+  background-size: 36px 36px, 36px 36px, 220% 100%;
+  animation: sounding-shimmer 1.8s linear infinite;
+}
+
+.sounding-skeleton-bottom {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.sounding-skeleton-chip {
+  width: 74px;
+  height: 10px;
+}
+
+@keyframes sounding-shimmer {
+  0% { background-position: 0 0, 0 0, 200% 0; }
+  100% { background-position: 0 0, 0 0, -120% 0; }
+}
+
 /* ── Full plot image view ───────────────────────────── */
 .sounding-plot-view {
   flex: 1;

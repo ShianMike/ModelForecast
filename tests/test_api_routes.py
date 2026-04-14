@@ -310,6 +310,33 @@ class ApiRouteTests(unittest.TestCase):
         self.assertEqual(payload["n_members"], 7)
         self.assertEqual(len(payload["members"]), 7)
 
+    def test_ensemble_falls_back_when_requested_variable_is_unsupported(self):
+        hourly = {"time": ["2026-04-14T00:00"]}
+        for member_idx in range(3):
+            hourly[f"temperature_2m_member{member_idx:02d}"] = [float(member_idx)]
+
+        with patch(
+            "routes.forecast_routes.open_meteo._request_with_retry",
+            side_effect=[
+                FakeResponse({"error": "unsupported variable"}, status_code=400),
+                FakeResponse({"hourly": hourly}),
+            ],
+        ):
+            response = self.client.get(
+                "/api/ensemble",
+                query_string={
+                    "variable": "simulated_reflectivity",
+                    "lat": "35",
+                    "lon": "-97",
+                },
+            )
+
+        payload = response.get_json()
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(payload["variable"], "simulated_reflectivity")
+        self.assertEqual(payload["source_variable"], "temperature_2m")
+        self.assertEqual(payload["n_members"], 3)
+
 
 if __name__ == "__main__":
     unittest.main()

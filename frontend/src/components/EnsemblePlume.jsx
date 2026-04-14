@@ -80,10 +80,22 @@ export default function EnsemblePlume({ data, loading, point, variable, onClose 
     return (
       <div className="ensemble-plume card fade-in" style={dragStyle}>
         <div className="ensemble-header drag-handle" onMouseDown={handleMouseDown}>
-          <span>Loading ensemble data…</span>
+          <span>Preparing Ensemble Plume</span>
           <button className="btn-icon" onClick={onClose}><X size={14} /></button>
         </div>
-        <div className="ensemble-loading"><div className="spinner" /></div>
+        <div className="ensemble-skeleton" aria-hidden="true">
+          <div className="ensemble-skeleton-head">
+            <div className="ensemble-skeleton-line skeleton" />
+            <div className="ensemble-skeleton-line skeleton" />
+          </div>
+          <div className="ensemble-skeleton-toolbar">
+            <div className="ensemble-skeleton-pill skeleton" />
+            <div className="ensemble-skeleton-pill skeleton" />
+            <div className="ensemble-skeleton-pill skeleton" />
+            <div className="ensemble-skeleton-pill skeleton" />
+          </div>
+          <div className="ensemble-skeleton-chart skeleton"><div className="ensemble-skeleton-grid" /></div>
+        </div>
       </div>
     );
   }
