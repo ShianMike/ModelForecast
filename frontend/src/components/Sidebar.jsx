@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Map, Layers, Wind, CloudRain, Globe, Zap, Cloud, Compass, Navigation, RefreshCw, Snowflake, Leaf, ExternalLink, Plus, Trash2 } from "lucide-react";
+import { Map, Layers, Wind, CloudRain, Globe, Zap, Cloud, Compass, RefreshCw, Snowflake, Leaf, ExternalLink, Plus, Trash2 } from "lucide-react";
 import ParameterPicker from "./ParameterPicker";
 import "./Sidebar.css";
 

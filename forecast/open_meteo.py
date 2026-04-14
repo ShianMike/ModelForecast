@@ -6,11 +6,13 @@ caches all forecast hours so subsequent fhour lookups are instant.
 Docs: https://open-meteo.com/en/docs
 """
 
-import requests
-import numpy as np
+import random
 import time
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
+
+import numpy as np
+import requests
 
 _session = requests.Session()
 _session.headers["User-Agent"] = "ModelForecastViewer/1.0"
@@ -25,14 +27,27 @@ def _request_with_retry(url, params=None, timeout=15, max_retries=3):
     """GET with automatic retry + exponential backoff on transient errors.
     Raises RateLimitError immediately on 429 (no retry — it won't clear for ~1h).
     """
+    last_exc = None
+    resp = None
     for attempt in range(max_retries):
-        resp = _session.get(url, params=params, timeout=timeout)
+        try:
+            resp = _session.get(url, params=params, timeout=timeout)
+        except requests.exceptions.RequestException as exc:
+            last_exc = exc
+            if attempt == max_retries - 1:
+                raise
+            time.sleep((2 ** attempt) + random.uniform(0.0, 0.5))
+            continue
         if resp.status_code == 429:
             raise RateLimitError("Weather API rate limited. Please wait a moment and try again.")
         if resp.status_code >= 500:
-            time.sleep(2 ** attempt)
+            if attempt == max_retries - 1:
+                return resp
+            time.sleep((2 ** attempt) + random.uniform(0.0, 0.5))
             continue
         return resp
+    if last_exc is not None:
+        raise last_exc
     return resp  # return last response even if still failing
 
 # ─── Model → Open-Meteo API endpoint mapping ──────────────
@@ -240,6 +255,8 @@ def fetch_grid_forecast(model, variable, forecast_hour, bbox=None):
     First call: batched multi-coordinate requests, caches ALL forecast hours.
     Subsequent calls (different fhour, same model/var/bbox): instant from cache.
     """
+    if forecast_hour < 0:
+        raise ValueError("Forecast hour must be greater than or equal to 0.")
     if bbox is None:
         bbox = DEFAULT_BBOX
 
@@ -300,6 +317,8 @@ def fetch_grid_forecast(model, variable, forecast_hour, bbox=None):
 
 def _extract_hour(payload, model_key, variable, forecast_hour):
     """Pull a single forecast hour from the cached all-hours grid."""
+    if forecast_hour < 0:
+        raise ValueError("Forecast hour must be greater than or equal to 0.")
     lats = payload["lats"]
     lons = payload["lons"]
     hourly_grid = payload["hourly_grid"]

@@ -10,7 +10,7 @@ export default function AnimationControls({
   playing, setPlaying,
   speed, setSpeed,
   run,
-  validTime, loading,
+  validTime,
 }) {
   const stepBack = () => setFhour(h => Math.max(0, h - step));
   const stepFwd  = () => setFhour(h => Math.min(maxFhour, h + step));

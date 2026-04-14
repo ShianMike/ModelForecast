@@ -1,8 +1,7 @@
 """
 Forecast API routes — gridded data and point forecasts.
-Routes NOMADS models (GFS, NAM, RAP, HRRR) through NOAA NOMADS GRIB filter,
-falls back to AWS Open Data S3 (byte-range GRIB2), then to Open-Meteo.
-Remainder (ECMWF, ICON, JMA, GEM) goes directly to Open-Meteo.
+Core forecast endpoints use NOAA GRIB sources (NOMADS first, AWS mirror second)
+for GFS, NAM, RAP, and HRRR. Ensemble data remains on Open-Meteo.
 """
 import math
 import logging
@@ -18,9 +17,17 @@ from flask import Blueprint, jsonify, request
 from forecast import nomads
 from forecast import aws_grib
 from forecast import open_meteo
+from forecast import run_cache
 from forecast.open_meteo import RateLimitError
 from forecast.parameters import get_color_scale
-from routes.helpers import _nan_safe
+from routes.helpers import (
+    QueryValidationError,
+    _nan_safe,
+    json_error,
+    parse_bbox,
+    parse_int_arg,
+    parse_lat_lon,
+)
 
 log = logging.getLogger(__name__)
 
@@ -46,12 +53,16 @@ _POINT_MODEL_CONFIG = {
     "rap": {"max_hour": 51, "step": 1},
 }
 
+_MODEL_MAX_HOURS = {model: cfg["max_hour"] for model, cfg in _POINT_MODEL_CONFIG.items()}
+
 _POINT_BBOX_HALF_SPAN = {
     "gfs": 0.40,
     "nam": 0.35,
     "rap": 0.25,
     "hrrr": 0.20,
 }
+
+_GRIB_SUPPORTED_MODELS = frozenset(_POINT_MODEL_CONFIG.keys())
 
 # Sounding data step — HRRR has hourly upper-air data;
 # GFS/NAM/RAP only have sounding data every 3 hours.
@@ -117,6 +128,81 @@ _ENSEMBLE_FALLBACK_ORDER = [
     "wind_speed_10m",
     "precipitation",
 ]
+
+_CROSS_SECTION_VARIABLES = {
+    "temperature": {
+        "base": "temperature",
+        "label": "Temperature",
+        "unit": "°C",
+        "request_params": {"temperature_unit": "celsius"},
+    },
+    "temperature_2m": {
+        "base": "temperature",
+        "label": "Temperature",
+        "unit": "°C",
+        "request_params": {"temperature_unit": "celsius"},
+    },
+    "temperature_850hPa": {
+        "base": "temperature",
+        "label": "Temperature",
+        "unit": "°C",
+        "request_params": {"temperature_unit": "celsius"},
+    },
+    "relative_humidity": {
+        "base": "relative_humidity",
+        "label": "Relative Humidity",
+        "unit": "%",
+        "request_params": {},
+    },
+    "relative_humidity_2m": {
+        "base": "relative_humidity",
+        "label": "Relative Humidity",
+        "unit": "%",
+        "request_params": {},
+    },
+    "wind_speed": {
+        "base": "wind_speed",
+        "label": "Wind Speed",
+        "unit": "kt",
+        "request_params": {"wind_speed_unit": "kn"},
+    },
+    "wind_speed_10m": {
+        "base": "wind_speed",
+        "label": "Wind Speed",
+        "unit": "kt",
+        "request_params": {"wind_speed_unit": "kn"},
+    },
+    "wind_speed_250hPa": {
+        "base": "wind_speed",
+        "label": "Wind Speed",
+        "unit": "kt",
+        "request_params": {"wind_speed_unit": "kn"},
+    },
+    "wind_speed_500hPa": {
+        "base": "wind_speed",
+        "label": "Wind Speed",
+        "unit": "kt",
+        "request_params": {"wind_speed_unit": "kn"},
+    },
+    "wind_speed_850hPa": {
+        "base": "wind_speed",
+        "label": "Wind Speed",
+        "unit": "kt",
+        "request_params": {"wind_speed_unit": "kn"},
+    },
+    "geopotential_height": {
+        "base": "geopotential_height",
+        "label": "Geopotential Height",
+        "unit": "m",
+        "request_params": {},
+    },
+    "geopotential_height_500hPa": {
+        "base": "geopotential_height",
+        "label": "Geopotential Height",
+        "unit": "m",
+        "request_params": {},
+    },
+}
 
 
 def _aws_sounding_patterns(level):
@@ -185,6 +271,77 @@ def _point_bbox(model, lat, lon):
         "lon_min": max(-180.0, lon - half),
         "lon_max": min(180.0, lon + half),
     }
+
+
+def _parse_fhour_arg(model, arg_name="fhour", default=0):
+    return parse_int_arg(
+        request.args,
+        arg_name,
+        default=default,
+        minimum=0,
+        maximum=_MODEL_MAX_HOURS.get(model.lower()),
+        clamp_max=True,
+    )
+
+
+def _require_grib_supported_model(model):
+    model_key = model.lower()
+    if model_key not in _GRIB_SUPPORTED_MODELS:
+        raise QueryValidationError(
+            f"Model '{model}' is not supported for this endpoint."
+        )
+    return model_key
+
+
+def _resolve_cross_section_variable(variable):
+    config = _CROSS_SECTION_VARIABLES.get(variable)
+    if not config:
+        raise QueryValidationError(
+            f"Variable '{variable}' is not supported for cross-sections."
+        )
+    return config
+
+
+def _relative_humidity_from_temp_dewpoint(temp_c, dewpoint_c):
+    if temp_c is None or dewpoint_c is None:
+        return None
+    try:
+        rh = 100.0 * (_es_hpa(dewpoint_c) / max(_es_hpa(temp_c), 1e-6))
+    except Exception:
+        return None
+    return max(0.0, min(100.0, rh))
+
+
+def _extract_cross_section_profile_value(level_row, var_base):
+    if var_base == "temperature":
+        return level_row.get("temperature")
+    if var_base == "wind_speed":
+        return level_row.get("wind_speed")
+    if var_base == "geopotential_height":
+        return level_row.get("height")
+    if var_base == "relative_humidity":
+        return _relative_humidity_from_temp_dewpoint(
+            level_row.get("temperature"),
+            level_row.get("dewpoint"),
+        )
+    return None
+
+
+def _load_persistent_forecast_cache(model, variable, fhour, bbox):
+    if not run_cache.is_enabled() or not run_cache.supports_model(model):
+        return None, None
+
+    candidate_run = run_cache.resolve_candidate_run(model)
+    entry = run_cache.load_entry(model, variable, fhour, bbox)
+    if run_cache.should_serve_entry(entry, candidate_run):
+        return entry["payload"], candidate_run
+    return None, candidate_run
+
+
+def _store_persistent_forecast_cache(model, variable, fhour, bbox, payload, requested_run):
+    if not run_cache.is_enabled() or not run_cache.supports_model(model):
+        return
+    run_cache.store_latest(model, variable, fhour, bbox, payload, requested_run=requested_run)
 
 
 def _nearest_message_value(msg, lat, lon):
@@ -733,6 +890,142 @@ def _resolve_aws_point_model(model):
     return None
 
 
+def _build_grib_meteogram(model, lat, lon):
+    if nomads.is_nomads_model(model):
+        try:
+            return _build_nomads_meteogram(model, lat, lon)
+        except Exception as exc:
+            log.info("NOMADS GRIB meteogram failed for %s: %s - trying AWS", model, exc)
+
+    aws_model = _resolve_aws_point_model(model)
+    if aws_model is not None:
+        try:
+            result = _build_aws_meteogram(aws_model, lat, lon)
+            result["model"] = model
+            result["requested_model"] = model
+            result["source_model"] = aws_model
+            return result
+        except Exception as exc:
+            log.info("AWS GRIB meteogram failed for %s via %s: %s", model, aws_model, exc)
+
+    raise RuntimeError(f"No GRIB source available for meteogram {model}")
+
+
+def _build_grib_sounding(model, lat, lon, fhour):
+    if nomads.is_nomads_model(model):
+        try:
+            result = _build_nomads_sounding(model, lat, lon, fhour)
+            result["analysis"] = _compute_sounding_analysis(result.get("profile", []))
+            return result
+        except Exception as exc:
+            log.info("NOMADS GRIB sounding failed for %s: %s - trying AWS", model, exc)
+
+    aws_model = _resolve_aws_point_model(model)
+    if aws_model is not None:
+        try:
+            result = _build_aws_sounding(aws_model, lat, lon, fhour)
+            result["model"] = model
+            result["source_model"] = aws_model
+            result["analysis"] = _compute_sounding_analysis(result.get("profile", []))
+            return result
+        except Exception as exc:
+            log.info("AWS GRIB sounding failed for %s via %s: %s", model, aws_model, exc)
+
+    raise RuntimeError(f"No GRIB source available for sounding {model} at F{fhour:03d}")
+
+
+def _build_grib_cross_section(model, variable, fhour, lat1, lon1, lat2, lon2):
+    variable_config = _resolve_cross_section_variable(variable)
+    sampled_fhour = _snap_sounding_fhour(model, fhour)
+    levels = [1000, 925, 850, 700, 500, 300, 250, 200]
+    points = []
+    for idx in range(20):
+        frac = idx / 19.0
+        lat = lat1 + (lat2 - lat1) * frac
+        lon = lon1 + (lon2 - lon1) * frac
+        points.append((round(lat, 3), round(lon, 3)))
+
+    def fetch_point_column(lat, lon):
+        cache_key = f"snd:{model}:{sampled_fhour}:{round(lat, 3)}:{round(lon, 3)}"
+        sounding = _point_cache_get(cache_key)
+        if sounding is None:
+            sounding = _build_grib_sounding(model, lat, lon, sampled_fhour)
+            _point_cache_set(cache_key, sounding)
+        profile_by_level = {
+            int(row["pressure"]): row
+            for row in sounding.get("profile", [])
+            if row.get("pressure") is not None
+        }
+        column = []
+        for level in levels:
+            level_row = profile_by_level.get(level)
+            value = (
+                _extract_cross_section_profile_value(level_row, variable_config["base"])
+                if level_row
+                else None
+            )
+            column.append(_f_or_none(value, 1))
+        return column, sounding.get("valid_time"), sounding.get("source"), sounding.get("source_model")
+
+    payloads = [None] * len(points)
+    failures = 0
+    max_workers = min(4, len(points))
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        futures = {
+            pool.submit(fetch_point_column, lat, lon): idx
+            for idx, (lat, lon) in enumerate(points)
+        }
+        for future in as_completed(futures):
+            idx = futures[future]
+            try:
+                payloads[idx] = future.result()
+            except Exception as exc:
+                failures += 1
+                log.debug(
+                    "Skipping cross-section point %s for %s/%s: %s",
+                    idx,
+                    model,
+                    variable,
+                    exc,
+                )
+                payloads[idx] = ([None] * len(levels), None, None, None)
+
+    if failures == len(points):
+        raise RuntimeError("No GRIB cross-section data available")
+
+    distances = []
+    for idx in range(len(points)):
+        if idx == 0:
+            distances.append(0)
+            continue
+        dlat = points[idx][0] - points[idx - 1][0]
+        dlon = points[idx][1] - points[idx - 1][1]
+        distance_km = math.sqrt(dlat ** 2 + dlon ** 2) * 111.0
+        distances.append(round(distances[-1] + distance_km, 1))
+
+    valid_time = next((payload[1] for payload in payloads if payload and payload[1]), None)
+    source = next((payload[2] for payload in payloads if payload and payload[2]), None)
+    source_model = next((payload[3] for payload in payloads if payload and payload[3]), model)
+
+    result = {
+        "model": model,
+        "source_model": source_model,
+        "source": source,
+        "variable": variable_config["base"],
+        "requested_variable": variable,
+        "requested_forecast_hour": fhour,
+        "forecast_hour": sampled_fhour,
+        "label": variable_config["label"],
+        "unit": variable_config["unit"],
+        "valid_time": valid_time,
+        "points": [{"lat": lat, "lon": lon} for lat, lon in points],
+        "levels": levels,
+        "distances": distances,
+        "values": [payload[0] for payload in payloads],
+    }
+    return _nan_safe(result)
+
+
 def _fetch_aws_point_fields(model, lat, lon, forecast_hour, search_patterns, field_map):
     url, run_date, run_cycle = aws_grib._build_url(model, forecast_hour)
     idx_entries = aws_grib._fetch_idx(url)
@@ -962,12 +1255,7 @@ def _get_supported(model):
         return nomads.get_supported_variables(model)
     if aws_grib.is_aws_model(model):
         return aws_grib.get_supported_variables(model)
-    return open_meteo.get_supported_variables(model)
-
-
-def _allow_open_meteo_fallback(model):
-    """HRRR should stay on GRIB sources to avoid Open-Meteo 429 bursts."""
-    return model.lower() != "hrrr"
+    return set()
 
 
 # Derived composite parameter definitions
@@ -1000,22 +1288,18 @@ COMPOSITE_PARAMS = {
 
 
 def _fetch_grid(model, variable, fhour, bbox):
-    """Fetch a single gridded field: NOMADS → AWS → Open-Meteo."""
+    """Fetch a single gridded field: NOMADS → AWS."""
     if nomads.is_nomads_model(model):
         try:
             return nomads.fetch_grid_forecast(model, variable, fhour, bbox)
-        except RateLimitError:
-            raise
-        except Exception:
-            pass
+        except Exception as exc:
+            log.info("NOMADS failed for %s/%s at fhour %s: %s", model, variable, fhour, exc)
     if aws_grib.is_aws_model(model):
         try:
             return aws_grib.fetch_grid_forecast(model, variable, fhour, bbox)
-        except Exception:
-            pass
-    if not _allow_open_meteo_fallback(model):
-        raise RuntimeError(f"No GRIB source available for {model}/{variable} at F{fhour:03d}")
-    return open_meteo.fetch_grid_forecast(model, variable, fhour, bbox)
+        except Exception as exc:
+            log.info("AWS failed for %s/%s at fhour %s: %s", model, variable, fhour, exc)
+    raise RuntimeError(f"No GRIB source available for {model}/{variable} at F{fhour:03d}")
 
 
 def _compute_bulk_shear(grids, fhour):
@@ -1239,25 +1523,24 @@ def get_forecast():
     Fetch gridded forecast data for map rendering.
 
     Query params:
-        model:    gfs, hrrr, ecmwf, icon, nam, rap, jma, gem
+        model:    gfs, hrrr, nam, rap
         variable: temperature_2m, cape, etc.
         fhour:    forecast hour (int)
         lat_min, lat_max, lon_min, lon_max: bounding box (optional)
     """
     model = request.args.get("model", "gfs")
     variable = request.args.get("variable", "temperature_2m")
-    fhour = request.args.get("fhour", "0", type=int)
-
-    bbox = None
-    if all(k in request.args for k in ("lat_min", "lat_max", "lon_min", "lon_max")):
-        bbox = {
-            "lat_min": float(request.args["lat_min"]),
-            "lat_max": float(request.args["lat_max"]),
-            "lon_min": float(request.args["lon_min"]),
-            "lon_max": float(request.args["lon_max"]),
-        }
+    try:
+        model = _require_grib_supported_model(model)
+        fhour = _parse_fhour_arg(model)
+        bbox = parse_bbox(request.args)
+    except QueryValidationError as exc:
+        return json_error(str(exc), exc.status_code)
 
     supported = _get_supported(model)
+    cached_payload, requested_run = _load_persistent_forecast_cache(model, variable, fhour, bbox)
+    if cached_payload is not None:
+        return jsonify(_nan_safe(cached_payload))
 
     # Handle composite/derived parameters
     if variable in COMPOSITE_PARAMS:
@@ -1293,47 +1576,31 @@ def get_forecast():
                 if "valid_time" not in result and first_grid.get("valid_time"):
                     result["valid_time"] = first_grid["valid_time"]
             result = _nan_safe(result)
+            _store_persistent_forecast_cache(model, variable, fhour, bbox, result, requested_run)
             return jsonify(result)
         except RateLimitError:
             return jsonify({"error": "Weather API rate limited. Please wait a moment and try again.", "retry_after": 60}), 429
-        except Exception as e:
-            return jsonify({"error": f"Failed to compute {variable}: {e}"}), 502
+        except Exception:
+            log.exception("Composite forecast failed for %s/%s at fhour %s", model, variable, fhour)
+            return json_error(f"Failed to compute '{variable}' forecast.", 502)
 
     if variable not in supported:
         return jsonify({"error": f"Variable '{variable}' is not available for model '{model}'"}), 400
 
     try:
-        # Fallback chain: NOMADS → AWS S3 → Open-Meteo
-        result = None
-        if nomads.is_nomads_model(model):
-            try:
-                result = nomads.fetch_grid_forecast(model, variable, fhour, bbox)
-            except RateLimitError:
-                raise
-            except Exception as e:
-                log.info("NOMADS failed for %s/%s: %s — trying AWS", model, variable, e)
-
-        if result is None and aws_grib.is_aws_model(model):
-            try:
-                result = aws_grib.fetch_grid_forecast(model, variable, fhour, bbox)
-            except Exception as e:
-                log.info("AWS failed for %s/%s: %s — trying Open-Meteo", model, variable, e)
-
-        if result is None and _allow_open_meteo_fallback(model):
-            result = open_meteo.fetch_grid_forecast(model, variable, fhour, bbox)
-        if result is None:
-            raise RuntimeError(f"No GRIB source available for {model}/{variable} at F{fhour:03d}")
-
+        result = _fetch_grid(model, variable, fhour, bbox)
         result = _nan_safe(result)
+        _store_persistent_forecast_cache(model, variable, fhour, bbox, result, requested_run)
         return jsonify(result)
     except RateLimitError:
         return jsonify({"error": "Weather API rate limited. Please wait a moment and try again.", "retry_after": 60}), 429
     except FileNotFoundError as e:
-        return jsonify({"error": str(e)}), 404
+        return json_error(str(e), 404)
     except ValueError as e:
-        return jsonify({"error": str(e)}), 400
-    except Exception as e:
-        return jsonify({"error": f"Failed to fetch forecast: {e}"}), 502
+        return json_error(str(e), 400)
+    except Exception:
+        log.exception("Forecast fetch failed for %s/%s at fhour %s", model, variable, fhour)
+        return json_error("Failed to fetch forecast data from upstream providers.", 502)
 
 
 @bp.route("/api/color-scale", methods=["GET"])
@@ -1352,16 +1619,16 @@ def get_meteogram():
     Fetch full time-series at a single point for meteogram display.
 
     Query params:
-        model:  gfs, hrrr, ecmwf, etc.
+        model:  gfs, hrrr, nam, rap
         lat:    latitude
         lon:    longitude
     """
     model = request.args.get("model", "gfs")
     try:
-        lat = float(request.args.get("lat", 0))
-        lon = float(request.args.get("lon", 0))
-    except (TypeError, ValueError):
-        return jsonify({"error": "Invalid lat/lon"}), 400
+        model = _require_grib_supported_model(model)
+        lat, lon = parse_lat_lon(request.args)
+    except QueryValidationError as exc:
+        return json_error(str(exc), exc.status_code)
 
     cache_key = f"met:{model}:{round(lat, 3)}:{round(lon, 3)}"
     cached = _meteogram_cache_get(cache_key)
@@ -1369,65 +1636,13 @@ def get_meteogram():
         return jsonify(cached)
 
     try:
-        if nomads.is_nomads_model(model):
-            try:
-                result = _build_nomads_meteogram(model, lat, lon)
-                _meteogram_cache_set(cache_key, result)
-                return jsonify(result)
-            except Exception as e:
-                log.info("NOMADS GRIB meteogram failed for %s: %s - trying AWS", model, e)
-
-        aws_model = _resolve_aws_point_model(model)
-        if aws_model is not None:
-            try:
-                result = _build_aws_meteogram(aws_model, lat, lon)
-                result["model"] = model
-                result["requested_model"] = model
-                result["source_model"] = aws_model
-                _meteogram_cache_set(cache_key, result)
-                return jsonify(result)
-            except Exception as e:
-                log.info("AWS GRIB meteogram failed for %s via %s: %s - trying Open-Meteo", model, aws_model, e)
-
-        if not _allow_open_meteo_fallback(model):
-            raise RuntimeError(f"No GRIB source available for meteogram {model}")
-
-        om_model = "gfs" if nomads.is_nomads_model(model) else model
-        candidates = [om_model] + [m for m in ("ecmwf", "icon", "gem", "jma", "gfs") if m != om_model]
-
-        last_err = None
-        for cand in candidates:
-            try:
-                result = open_meteo.fetch_point_forecast(cand, lat, lon)
-                result = _nan_safe(result)
-                result["requested_model"] = model
-                result["source_model"] = cand
-                _meteogram_cache_set(cache_key, result)
-                return jsonify(result)
-            except Exception as e:
-                last_err = e
-                continue
-
-        if isinstance(last_err, RateLimitError):
-            raise last_err
-        raise RuntimeError(last_err or "No upstream point forecast source succeeded")
-    except RateLimitError:
-        stale = _meteogram_cache_get(cache_key)
-        if stale is not None:
-            stale_out = {**stale, "stale": True, "stale_reason": "upstream_rate_limited"}
-            return jsonify(stale_out)
-        return jsonify({
-            "model": model,
-            "lat": lat,
-            "lon": lon,
-            "times": [],
-            "variables": {},
-            "units": {},
-            "stale": True,
-            "stale_reason": "upstream_rate_limited",
-        })
-    except Exception as e:
-        return jsonify({"error": f"Failed to fetch meteogram: {e}"}), 502
+        result = _build_grib_meteogram(model, lat, lon)
+        result = _nan_safe(result)
+        _meteogram_cache_set(cache_key, result)
+        return jsonify(result)
+    except Exception:
+        log.exception("Meteogram fetch failed for %s at (%.3f, %.3f)", model, lat, lon)
+        return json_error("Failed to fetch meteogram data from upstream providers.", 502)
 
 
 @bp.route("/api/sounding", methods=["GET"])
@@ -1436,19 +1651,19 @@ def get_sounding():
     Fetch vertical profile data at a point for a simple sounding display.
 
     Query params:
-        model:  gfs, ecmwf, etc.
+        model:  gfs, hrrr, nam, rap
         lat:    latitude
         lon:    longitude
         fhour:  forecast hour (default 0)
     """
-    model = request.args.get("model", "gfs")
-    fhour_raw = request.args.get("fhour", "0", type=int)
-    fhour = _snap_sounding_fhour(model, fhour_raw)
     try:
-        lat = float(request.args.get("lat", 0))
-        lon = float(request.args.get("lon", 0))
-    except (TypeError, ValueError):
-        return jsonify({"error": "Invalid lat/lon"}), 400
+        model = request.args.get("model", "gfs")
+        model = _require_grib_supported_model(model)
+        fhour_raw = _parse_fhour_arg(model)
+        fhour = _snap_sounding_fhour(model, fhour_raw)
+        lat, lon = parse_lat_lon(request.args)
+    except QueryValidationError as exc:
+        return json_error(str(exc), exc.status_code)
 
     cache_key = f"snd:{model}:{fhour}:{round(lat, 3)}:{round(lon, 3)}"
     cached = _point_cache_get(cache_key)
@@ -1456,137 +1671,13 @@ def get_sounding():
         return jsonify(cached)
 
     try:
-        if nomads.is_nomads_model(model):
-            try:
-                result = _build_nomads_sounding(model, lat, lon, fhour)
-                result["analysis"] = _compute_sounding_analysis(result.get("profile", []))
-                _point_cache_set(cache_key, result)
-                return jsonify(result)
-            except Exception as e:
-                log.info("NOMADS GRIB sounding failed for %s: %s - trying AWS", model, e)
-
-        aws_model = _resolve_aws_point_model(model)
-        if aws_model is not None:
-            try:
-                result = _build_aws_sounding(aws_model, lat, lon, fhour)
-                result["model"] = model
-                result["source_model"] = aws_model
-                result["analysis"] = _compute_sounding_analysis(result.get("profile", []))
-                _point_cache_set(cache_key, result)
-                return jsonify(result)
-            except Exception as e:
-                log.info("AWS GRIB sounding failed for %s via %s: %s - trying Open-Meteo", model, aws_model, e)
-
-        if not _allow_open_meteo_fallback(model):
-            raise RuntimeError(f"No GRIB source available for sounding {model} at F{fhour:03d}")
-
-        # Open-Meteo fallback for non-NOMADS models or GRIB failure
-        levels = _SOUNDING_LEVELS
-        hourly_vars = []
-        for lev in levels:
-            hourly_vars.append(f"temperature_{lev}hPa")
-            hourly_vars.append(f"relative_humidity_{lev}hPa")
-            hourly_vars.append(f"wind_speed_{lev}hPa")
-            hourly_vars.append(f"wind_direction_{lev}hPa")
-            hourly_vars.append(f"geopotential_height_{lev}hPa")
-
-        om_model = "gfs" if nomads.is_nomads_model(model) else model
-        candidates = [om_model] + [m for m in ("ecmwf", "icon", "gem", "jma", "gfs") if m != om_model]
-
-        params = {
-            "latitude": round(lat, 4),
-            "longitude": round(lon, 4),
-            "hourly": ",".join(hourly_vars),
-            "temperature_unit": "celsius",
-            "wind_speed_unit": "kn",
-        }
-
-        data = None
-        source_model = None
-        last_err = None
-        for cand in candidates:
-            endpoint = open_meteo.MODEL_ENDPOINTS.get(cand)
-            if not endpoint:
-                continue
-            try:
-                resp = open_meteo._request_with_retry(endpoint, params=params, timeout=20)
-                resp.raise_for_status()
-                data = resp.json()
-                source_model = cand
-                break
-            except Exception as e:
-                last_err = e
-                continue
-
-        if data is None:
-            if isinstance(last_err, RateLimitError):
-                raise last_err
-            raise RuntimeError(last_err or "No upstream sounding source succeeded")
-
-        hourly = data.get("hourly", {})
-        times = hourly.get("time", [])
-        idx = min(fhour, len(times) - 1) if times else 0
-
-        profile = []
-        for lev in levels:
-            temp = hourly.get(f"temperature_{lev}hPa", [])
-            rh = hourly.get(f"relative_humidity_{lev}hPa", [])
-            ws = hourly.get(f"wind_speed_{lev}hPa", [])
-            wd = hourly.get(f"wind_direction_{lev}hPa", [])
-            gh = hourly.get(f"geopotential_height_{lev}hPa", [])
-
-            t_val = temp[idx] if idx < len(temp) else None
-            rh_val = rh[idx] if idx < len(rh) else None
-            ws_val = ws[idx] if idx < len(ws) else None
-            wd_val = wd[idx] if idx < len(wd) else None
-            gh_val = gh[idx] if idx < len(gh) else None
-
-            # Approximate dewpoint from T and RH using Magnus formula
-            td_val = None
-            if t_val is not None and rh_val is not None and rh_val > 0:
-                a, b = 17.27, 237.7
-                alpha = (a * t_val) / (b + t_val) + math.log(rh_val / 100.0)
-                td_val = round((b * alpha) / (a - alpha), 1)
-
-            profile.append({
-                "pressure": lev,
-                "temperature": t_val,
-                "dewpoint": td_val,
-                "wind_speed": ws_val,
-                "wind_direction": wd_val,
-                "height": gh_val,
-            })
-
-        result = {
-            "model": model,
-            "source_model": source_model,
-            "lat": lat,
-            "lon": lon,
-            "forecast_hour": fhour,
-            "valid_time": times[idx] if idx < len(times) else None,
-            "profile": profile,
-        }
-        result["analysis"] = _compute_sounding_analysis(profile)
+        result = _build_grib_sounding(model, lat, lon, fhour)
         result = _nan_safe(result)
         _point_cache_set(cache_key, result)
         return jsonify(result)
-    except RateLimitError:
-        stale = _point_cache_get(cache_key)
-        if stale is not None:
-            stale_out = {**stale, "stale": True, "stale_reason": "upstream_rate_limited"}
-            return jsonify(stale_out)
-        return jsonify({
-            "model": model,
-            "lat": lat,
-            "lon": lon,
-            "forecast_hour": fhour,
-            "valid_time": None,
-            "profile": [],
-            "stale": True,
-            "stale_reason": "upstream_rate_limited",
-        })
-    except Exception as e:
-        return jsonify({"error": f"Failed to fetch sounding: {e}"}), 502
+    except Exception:
+        log.exception("Sounding fetch failed for %s at fhour %s (%.3f, %.3f)", model, fhour, lat, lon)
+        return json_error("Failed to fetch sounding data from upstream providers.", 502)
 
 
 # ─── Sounding plot proxy (Sounding Analysis project) ───────
@@ -1626,16 +1717,15 @@ def get_sounding_plot():
     Returns:
         { image (base64 PNG), params, profile, meta }
     """
-    model = request.args.get("model", "gfs")
-    fhour_raw = request.args.get("fhour", "0", type=int)
-    fhour = _snap_sounding_fhour(model, fhour_raw)
-    theme = request.args.get("theme", "dark")
-    colorblind = request.args.get("colorblind", "false").lower() == "true"
     try:
-        lat = float(request.args.get("lat", 0))
-        lon = float(request.args.get("lon", 0))
-    except (TypeError, ValueError):
-        return jsonify({"error": "Invalid lat/lon"}), 400
+        model = request.args.get("model", "gfs")
+        fhour_raw = _parse_fhour_arg(model)
+        fhour = _snap_sounding_fhour(model, fhour_raw)
+        theme = request.args.get("theme", "dark")
+        colorblind = request.args.get("colorblind", "false").lower() == "true"
+        lat, lon = parse_lat_lon(request.args)
+    except QueryValidationError as exc:
+        return json_error(str(exc), exc.status_code)
 
     cache_key = f"sndplot:{model}:{fhour}:{round(lat, 3)}:{round(lon, 3)}:{theme}"
     cached = _plot_cache_get(cache_key)
@@ -1675,100 +1765,46 @@ def get_sounding_plot():
         except Exception:
             pass
         return jsonify({"error": body.get("error", f"Sounding Analysis returned {status}")}), status
-    except Exception as e:
-        return jsonify({"error": f"Failed to fetch sounding plot: {e}"}), 502
+    except Exception:
+        log.exception("Sounding plot fetch failed for %s at fhour %s (%.3f, %.3f)", model, fhour, lat, lon)
+        return json_error("Failed to fetch sounding plot from the upstream service.", 502)
 
 
 @bp.route("/api/cross-section", methods=["GET"])
 def get_cross_section():
     """
-    Fetch a vertical cross-section of temperature along a line.
+    Fetch a vertical cross-section along a line using GRIB soundings.
 
     Query params:
         model, variable, fhour,
         lat1, lon1, lat2, lon2  — endpoints of the cross-section line
     """
-    model = request.args.get("model", "gfs")
-    variable = request.args.get("variable", "temperature")
-    fhour = request.args.get("fhour", "0", type=int)
     try:
-        lat1 = float(request.args["lat1"])
-        lon1 = float(request.args["lon1"])
-        lat2 = float(request.args["lat2"])
-        lon2 = float(request.args["lon2"])
-    except (KeyError, TypeError, ValueError):
-        return jsonify({"error": "Missing or invalid lat1/lon1/lat2/lon2"}), 400
-
-    n_points = 20  # horizontal resolution along the line
-    levels = [1000, 925, 850, 700, 500, 300, 250, 200]
-    var_base = "temperature"  # cross-section uses temperature by default
-
-    om_model = "gfs" if nomads.is_nomads_model(model) else model
-    endpoint = open_meteo.MODEL_ENDPOINTS.get(om_model)
-    if not endpoint:
-        return jsonify({"error": f"Unknown model: {model}"}), 400
+        model = request.args.get("model", "gfs")
+        model = _require_grib_supported_model(model)
+        variable = request.args.get("variable", "temperature")
+        fhour = _parse_fhour_arg(model)
+        lat1, lon1 = parse_lat_lon(request.args, "lat1", "lon1")
+        lat2, lon2 = parse_lat_lon(request.args, "lat2", "lon2")
+        _resolve_cross_section_variable(variable)
+    except QueryValidationError as exc:
+        return json_error(str(exc), exc.status_code)
 
     try:
-        # Generate points along the line
-        points = []
-        for k in range(n_points):
-            frac = k / max(n_points - 1, 1)
-            lat = lat1 + (lat2 - lat1) * frac
-            lon = lon1 + (lon2 - lon1) * frac
-            points.append((round(lat, 3), round(lon, 3)))
-
-        # Build hourly vars for all pressure levels
-        hourly_vars = [f"{var_base}_{lev}hPa" for lev in levels]
-        hourly_vars.append("temperature_2m")
-
-        # Fetch each point
-        grid = []  # [n_points][n_levels]
-        for lat, lon in points:
-            params = {
-                "latitude": lat,
-                "longitude": lon,
-                "hourly": ",".join(hourly_vars),
-                "temperature_unit": "celsius",
-            }
-            resp = open_meteo._request_with_retry(endpoint, params=params, timeout=15)
-            resp.raise_for_status()
-            data = resp.json()
-            hourly = data.get("hourly", {})
-            times = hourly.get("time", [])
-            idx = min(fhour, len(times) - 1) if times else 0
-
-            col = []
-            for lev in levels:
-                arr = hourly.get(f"{var_base}_{lev}hPa", [])
-                col.append(arr[idx] if idx < len(arr) else None)
-            grid.append(col)
-
-        # Distance along line (km, approximate)
-        distances = []
-        for k in range(n_points):
-            if k == 0:
-                distances.append(0)
-            else:
-                dlat = points[k][0] - points[k - 1][0]
-                dlon = points[k][1] - points[k - 1][1]
-                d = math.sqrt(dlat ** 2 + dlon ** 2) * 111  # rough km
-                distances.append(round(distances[-1] + d, 1))
-
-        result = {
-            "model": model,
-            "variable": var_base,
-            "forecast_hour": fhour,
-            "points": [{"lat": p[0], "lon": p[1]} for p in points],
-            "levels": levels,
-            "distances": distances,
-            "values": grid,  # [n_points][n_levels]
-        }
-        result = _nan_safe(result)
+        result = _build_grib_cross_section(model, variable, fhour, lat1, lon1, lat2, lon2)
         return jsonify(result)
-    except RateLimitError:
-        return jsonify({"error": "Rate limited. Try again shortly.", "retry_after": 60}), 429
-    except Exception as e:
-        return jsonify({"error": f"Failed to fetch cross-section: {e}"}), 502
+    except Exception:
+        log.exception(
+            "Cross-section fetch failed for %s/%s at fhour %s from (%.3f, %.3f) to (%.3f, %.3f)",
+            model,
+            variable,
+            fhour,
+            lat1,
+            lon1,
+            lat2,
+            lon2,
+        )
+        return json_error("Failed to fetch cross-section data from upstream providers.", 502)
 
 
 @bp.route("/api/ensemble", methods=["GET"])
@@ -1783,10 +1819,9 @@ def get_ensemble():
         { times, members: [ [val,...], ... ], percentiles: { p10, p25, p50, p75, p90 } }
     """
     try:
-        lat = float(request.args.get("lat", 0))
-        lon = float(request.args.get("lon", 0))
-    except (TypeError, ValueError):
-        return jsonify({"error": "Invalid lat/lon"}), 400
+        lat, lon = parse_lat_lon(request.args)
+    except QueryValidationError as exc:
+        return json_error(str(exc), exc.status_code)
 
     requested_variable = request.args.get("variable", "temperature_2m")
     candidate_variables = [requested_variable]
@@ -1850,7 +1885,7 @@ def get_ensemble():
                 "lon": lon,
                 "times": times,
                 "n_members": len(members),
-                "members": members[:5],
+                "members": members,
                 "percentiles": percentiles,
                 "valid_ratio": round(valid_ratio, 4),
             }
@@ -1863,5 +1898,6 @@ def get_ensemble():
         return jsonify(selected)
     except RateLimitError:
         return jsonify({"error": "Rate limited. Try again shortly.", "retry_after": 60}), 429
-    except Exception as e:
-        return jsonify({"error": f"Failed to fetch ensemble: {e}"}), 502
+    except Exception:
+        log.exception("Ensemble fetch failed for %s at (%.3f, %.3f)", requested_variable, lat, lon)
+        return json_error("Failed to fetch ensemble data from the upstream provider.", 502)

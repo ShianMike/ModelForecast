@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState } from "react";
 import { X, Scissors, Minus } from "lucide-react";
 import useDraggable from "../hooks/useDraggable";
 import {
@@ -8,10 +8,10 @@ import {
 import "./CrossSection.css";
 
 /* Interpolate a value to a color on a blue→white→red scale */
-function tempColor(val) {
+function valueColor(val, min, max) {
   if (val == null) return "#666";
-  const t = Math.max(-40, Math.min(40, val));
-  const norm = (t + 40) / 80; // 0..1
+  if (max <= min) return "rgb(255,255,255)";
+  const norm = (Math.max(min, Math.min(max, val)) - min) / (max - min);
   if (norm < 0.5) {
     const f = norm * 2;
     const r = Math.round(50 + f * 205);
@@ -75,18 +75,28 @@ export default function CrossSection({ data, loading, line, model, onClose, onSt
 
   /* Build scatter data for heatmap-like visualization */
   const chartData = [];
+  let minValue = Infinity;
+  let maxValue = -Infinity;
   for (let i = 0; i < data.distances.length; i++) {
     for (let j = 0; j < data.levels.length; j++) {
       const val = data.values[i]?.[j];
       if (val != null) {
+        minValue = Math.min(minValue, val);
+        maxValue = Math.max(maxValue, val);
         chartData.push({
           distance: data.distances[i],
           pressure: data.levels[j],
-          temperature: val,
+          value: val,
         });
       }
     }
   }
+  const safeMinValue = Number.isFinite(minValue) ? minValue : 0;
+  const safeMaxValue = Number.isFinite(maxValue) ? maxValue : safeMinValue;
+  const midValue = (safeMinValue + safeMaxValue) / 2;
+  const valueLabel = data.label || "Value";
+  const unitLabel = data.unit || "";
+  const formatValue = (val) => `${Number(val).toFixed(1)}${unitLabel}`;
 
   return (
     <div className={`cross-section card fade-in${collapsed ? " cross-collapsed" : ""}`} style={dragStyle}>
@@ -102,7 +112,7 @@ export default function CrossSection({ data, loading, line, model, onClose, onSt
 
       {!collapsed && <>
       <div className="cross-panel">
-        <div className="section-label">Temperature (°C) along line ({data.distances[data.distances.length - 1]} km)</div>
+        <div className="section-label">{valueLabel}{unitLabel ? ` (${unitLabel})` : ""} along line ({data.distances[data.distances.length - 1]} km)</div>
         <ResponsiveContainer width="100%" height={280}>
           <ScatterChart>
             <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
@@ -124,17 +134,14 @@ export default function CrossSection({ data, loading, line, model, onClose, onSt
               unit=" hPa"
               tick={{ fontSize: 10, fill: "var(--text-muted)" }}
             />
-            <ZAxis dataKey="temperature" range={[80, 80]} />
+            <ZAxis dataKey="value" range={[80, 80]} />
             <Tooltip
               contentStyle={{ background: "var(--bg-card)", border: "1px solid var(--border)", borderRadius: 8, fontSize: 12 }}
-              formatter={(val, name) => {
-                if (name === "Temperature") return [`${val?.toFixed(1)}°C`];
-                return [val];
-              }}
+              formatter={(val) => [formatValue(val), valueLabel]}
             />
             <Scatter data={chartData} shape="square">
               {chartData.map((d, i) => (
-                <Cell key={i} fill={tempColor(d.temperature)} />
+                <Cell key={i} fill={valueColor(d.value, safeMinValue, safeMaxValue)} />
               ))}
             </Scatter>
           </ScatterChart>
@@ -142,9 +149,9 @@ export default function CrossSection({ data, loading, line, model, onClose, onSt
       </div>
 
       <div className="cross-legend">
-        <span style={{ color: "rgb(50,50,255)" }}>-40°C</span>
-        <span style={{ color: "rgb(255,255,255)" }}>0°C</span>
-        <span style={{ color: "rgb(255,50,50)" }}>+40°C</span>
+        <span style={{ color: "rgb(50,50,255)" }}>{formatValue(safeMinValue)}</span>
+        <span style={{ color: "rgb(255,255,255)" }}>{formatValue(midValue)}</span>
+        <span style={{ color: "rgb(255,50,50)" }}>{formatValue(safeMaxValue)}</span>
       </div>
       </>}
     </div>

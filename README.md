@@ -3,7 +3,7 @@
 [![GitHub last commit](https://img.shields.io/github/last-commit/ShianMike/ModelForecast?style=flat-square&color=blue)](https://github.com/ShianMike/ModelForecast/commits/main)
 [![GitHub stars](https://img.shields.io/github/stars/ShianMike/ModelForecast?style=flat-square)](https://github.com/ShianMike/ModelForecast/stargazers)
 [![GitHub forks](https://img.shields.io/github/forks/ShianMike/ModelForecast?style=flat-square)](https://github.com/ShianMike/ModelForecast/forks)
-[![Made with Python](https://img.shields.io/badge/Python-3.14-3776AB?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
+[![Made with Python](https://img.shields.io/badge/Python-3.12-3776AB?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
 [![Made with React](https://img.shields.io/badge/React-18-61DAFB?style=flat-square&logo=react&logoColor=black)](https://react.dev/)
 [![Deployed on Cloud Run](https://img.shields.io/badge/Cloud%20Run-deployed-4285F4?style=flat-square&logo=googlecloud&logoColor=white)](https://model-forecast-693545589581.us-central1.run.app)
 [![License](https://img.shields.io/badge/license-Educational%20%2F%20Research-green?style=flat-square)](#license)
@@ -92,7 +92,7 @@ Server-side computed derived parameters:
 ## Project Structure
 
 ```
-├── app.py                 # Flask entry point (CORS, Talisman, rate limits, SPA catch-all)
+├── app.py                 # Flask entry point (CORS, Talisman, SPA catch-all)
 ├── gunicorn.conf.py       # Gunicorn WSGI config (reads PORT from env)
 ├── requirements.txt       # Python dependencies
 ├── Dockerfile             # Multi-stage build (Node + Python)
@@ -161,7 +161,7 @@ The Vite dev server proxies `/api` requests to the backend at `localhost:5001`.
 | **Backend** | Google Cloud Run (us-central1) | `https://model-forecast-693545589581.us-central1.run.app` |
 | **Frontend** | GitHub Pages | `https://shianmike.github.io/ModelForecast/` |
 
-**Cloud Run config:** 1 GiB memory, 1 vCPU, max 2 instances, 300 s timeout, 10 concurrency.
+**Cloud Run config:** 1 GiB memory, 2 vCPU, min 1 instance, max 3 instances, 300 s timeout.
 Persistent run cache: `gs://model-forecast-run-cache-693545589581`
 
 ### Deploy Commands
@@ -198,7 +198,8 @@ gcloud run deploy model-forecast --source . --project model-forecast-app --regio
 - **HTTPS:** forced in production via Flask-Talisman (HSTS 2-year preload)
 - **Content Security Policy:** restrictive CSP allowing only required external resources (Carto, OSM, Google Fonts, NOMADS)
 - **CORS:** production origin (`shianmike.github.io`) + localhost for development
-- **Rate limiting:** Flask-Limiter — 2000 req/min, 120 req/sec (production only)
+- **Application rate limiting:** disabled for forecast traffic
+- **Upstream limits:** third-party weather providers may still return `429` responses
 - **Security headers:** X-Content-Type-Options, X-Frame-Options DENY, COOP, CORP, Permissions-Policy, Referrer-Policy
 - **Input validation:** path-traversal blocking, 16 MB request-size limit
 
@@ -212,7 +213,6 @@ gcloud run deploy model-forecast --source . --project model-forecast-app --regio
 |---------|---------|
 | Flask 3.1 | Web framework |
 | flask-cors 4.0 | CORS headers |
-| flask-limiter 3.5 | Rate limiting |
 | flask-talisman 1.1 | Security headers |
 | gunicorn 22.0 | WSGI server |
 | requests 2.31 | NOMADS HTTP client |

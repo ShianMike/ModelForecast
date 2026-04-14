@@ -1,7 +1,9 @@
 name: Deploy to Cloud Run
 
 on:
-  push:
+  workflow_run:
+    workflows: ["Test and Validate"]
+    types: [completed]
     branches: [main]
   workflow_dispatch:
 
@@ -10,9 +12,11 @@ env:
   REGION: us-central1
   SERVICE: model-forecast
   IMAGE: us-central1-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/model-forecast/app
+  SOURCE_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
 
 jobs:
   deploy:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -20,6 +24,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.SOURCE_SHA }}
 
       - id: auth
         uses: google-github-actions/auth@v2
@@ -34,14 +40,14 @@ jobs:
 
       - name: Build and push Docker image
         run: |
-          docker build -t ${{ env.IMAGE }}:${{ github.sha }} -t ${{ env.IMAGE }}:latest .
-          docker push ${{ env.IMAGE }}:${{ github.sha }}
+          docker build -t ${{ env.IMAGE }}:${{ env.SOURCE_SHA }} -t ${{ env.IMAGE }}:latest .
+          docker push ${{ env.IMAGE }}:${{ env.SOURCE_SHA }}
           docker push ${{ env.IMAGE }}:latest
 
       - name: Deploy to Cloud Run
         run: |
           gcloud run deploy ${{ env.SERVICE }} \
-            --image ${{ env.IMAGE }}:${{ github.sha }} \
+            --image ${{ env.IMAGE }}:${{ env.SOURCE_SHA }} \
             --region ${{ env.REGION }} \
             --platform managed \
             --allow-unauthenticated \
@@ -50,4 +56,4 @@ jobs:
             --timeout 300 \
             --min-instances 1 \
             --max-instances 3 \
-            --set-env-vars "GUNICORN_THREADS=4,WEB_CONCURRENCY=2"
+            --set-env-vars "GUNICORN_THREADS=4,WEB_CONCURRENCY=2,FORECAST_CACHE_BUCKET=model-forecast-run-cache-693545589581"

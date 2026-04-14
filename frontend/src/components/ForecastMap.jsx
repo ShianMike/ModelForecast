@@ -1,9 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from "react";
+import L from "leaflet";
 import CanvasOverlay from "./CanvasOverlay";
 import "./ForecastMap.css";
-
-/* Leaflet loaded from CDN in index.html */
-const L = window.L;
 
 const DARK_TILES = "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png";
 const LIGHT_TILES = "https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png";
@@ -30,7 +28,7 @@ function findNearestIndex(sortedValues, target) {
     : prev;
 }
 
-export default function ForecastMap({ gridData, loading, error, bbox, parameter, overlayOpacity, validTime, model, onMapReady, onMapClick, showContours }) {
+export default function ForecastMap({ gridData, loading, error, bbox, parameter, overlayOpacity, onMapReady, onMapClick, showContours }) {
   const mapContainerRef = useRef(null);
   const mapRef = useRef(null);
   const tileRef = useRef(null);
@@ -62,7 +60,7 @@ export default function ForecastMap({ gridData, loading, error, bbox, parameter,
     if (onMapReady) onMapReady(map);
 
     return () => { map.remove(); mapRef.current = null; };
-  }, []);
+  }, [onMapReady]);
 
   /* Update tiles on theme change */
   useEffect(() => {

@@ -2,7 +2,7 @@ import { useState, useMemo } from "react";
 import { X, Minus } from "lucide-react";
 import useDraggable from "../hooks/useDraggable";
 import {
-  LineChart, Line, Area, AreaChart, ComposedChart,
+  Line, Area, ComposedChart,
   XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, Legend,
 } from "recharts";
@@ -37,7 +37,6 @@ export default function EnsemblePlume({ data, loading, point, variable, onClose 
   const [collapsed, setCollapsed] = useState(false);
   const [rangeHours, setRangeHours] = useState(24);
 
-  const pct = data?.percentiles || {};
   const paramLabel = variable?.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase()) || "Value";
   const sourceVariable = data?.source_variable || variable;
   const usingFallbackVariable = sourceVariable !== variable;
@@ -45,6 +44,7 @@ export default function EnsemblePlume({ data, loading, point, variable, onClose 
 
   const chartData = useMemo(() => {
     if (!data?.times?.length) return [];
+    const pct = data.percentiles || {};
     const t0 = data.times[0] ? new Date(data.times[0]).getTime() : 0;
     const cutoff = rangeHours === Infinity ? Infinity : t0 + rangeHours * 3600_000;
     return data.times
@@ -72,7 +72,7 @@ export default function EnsemblePlume({ data, loading, point, variable, onClose 
         return row;
       })
       .filter(Boolean);
-  }, [data, pct, rangeHours]);
+  }, [data, rangeHours]);
 
   const dragStyle = { transform: `translate(${offset.x}px, ${offset.y}px)` };
 

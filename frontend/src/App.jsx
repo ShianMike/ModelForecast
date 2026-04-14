@@ -125,7 +125,7 @@ export default function App() {
   const [fhourStep, setFhourStep] = useState(3);
   const [region, setRegion] = useState(initHash.current.region || "conus");
   const [customRegions, setCustomRegions] = useState(loadCustomRegions);
-  const REGIONS = { ...BUILTIN_REGIONS, ...customRegions };
+  const REGIONS = useMemo(() => ({ ...BUILTIN_REGIONS, ...customRegions }), [customRegions]);
   const [bbox, setBbox] = useState(REGIONS[initHash.current.region] || BUILTIN_REGIONS.conus);
 
   /* ── Model comparison state ────────────────────────────── */
@@ -133,6 +133,8 @@ export default function App() {
   const [compareModel, setCompareModel] = useState("nam");
   const [compareGridData, setCompareGridData] = useState(null);
   const [compareGridLoading, setCompareGridLoading] = useState(false);
+  const gridRequestIdRef = useRef(0);
+  const compareRequestIdRef = useRef(0);
 
   /* ── Map ref for reading current bounds (custom region save) ── */
   const mapInstanceRef = useRef(null);
@@ -541,20 +543,20 @@ export default function App() {
     if (info) {
       setMaxFhour(info.maxHour || 384);
       setFhourStep(info.step || 3);
-      if (fhour > (info.maxHour || 384)) setFhour(0);
+      setFhour((current) => (current > (info.maxHour || 384) ? 0 : current));
     }
-  }, [selectedModel, models]);
+  }, [selectedModel, models, fhour]);
 
   /* Re-fetch parameters filtered for this model */
   useEffect(() => {
     fetchParameters(selectedModel)
       .then((p) => {
         setParameterCategories(p);
-        // If selected param is not in the new set, reset to first available
+        /* If selected param is not in the new set, reset to first available */
         const allParams = Object.values(p).flatMap((c) => Object.keys(c.params || {}));
-        if (allParams.length && !allParams.includes(selectedParam)) {
-          setSelectedParam(allParams[0]);
-        }
+        setSelectedParam((current) => (
+          allParams.length && !allParams.includes(current) ? allParams[0] : current
+        ));
       })
       .catch(() => {}); // silently keep previous categories on error
   }, [selectedModel]);
@@ -562,7 +564,7 @@ export default function App() {
   /* Update bbox when region preset changes */
   useEffect(() => {
     if (REGIONS[region]) setBbox(REGIONS[region]);
-  }, [region]);
+  }, [region, REGIONS]);
 
   /* Clear frame cache when model, param, or region changes */
   useEffect(() => {
@@ -573,10 +575,12 @@ export default function App() {
   const loadForecast = useCallback(async (hour) => {
     const h = hour ?? fhour;
     const key = frameCacheKey(selectedModel, selectedParam, h, region);
+    const requestId = ++gridRequestIdRef.current;
 
     /* Hit: skip network + loading state entirely */
     const cached = frameCacheRef.current.get(key);
     if (cached) {
+      if (requestId !== gridRequestIdRef.current) return;
       setGridData(cached);
       setGridError(null);
       return;
@@ -602,6 +606,7 @@ export default function App() {
           colorScaleCacheRef.current[cmap] = csStops;
         } catch { csStops = null; }
       }
+      if (requestId !== gridRequestIdRef.current) return;
       if (csStops) data.color_scale = csStops;
 
       setGridData(data);
@@ -612,21 +617,23 @@ export default function App() {
       }
       frameCacheRef.current.set(key, data);
     } catch (err) {
+      if (requestId !== gridRequestIdRef.current) return;
       setGridError(err.message);
     } finally {
-      setGridLoading(false);
+      if (requestId === gridRequestIdRef.current) setGridLoading(false);
     }
-  }, [selectedModel, selectedParam, fhour, bbox, region]);
+  }, [selectedModel, selectedParam, fhour, bbox, region, parameterCategories]);
 
   /* Load forecast when key state changes */
   useEffect(() => {
     if (!initLoading && !initError) loadForecast();
-  }, [selectedModel, selectedParam, fhour, bbox, initLoading]);
+    return () => { gridRequestIdRef.current += 1; };
+  }, [loadForecast, initLoading, initError]);
 
   /* ── Comparison model fetch ────────────────────────────── */
   useEffect(() => {
     if (!compareMode || !compareModel) { setCompareGridData(null); return; }
-    let cancelled = false;
+    const requestId = ++compareRequestIdRef.current;
     setCompareGridLoading(true);
     (async () => {
       try {
@@ -647,15 +654,15 @@ export default function App() {
           } catch { csStops = null; }
         }
         if (csStops) data.color_scale = csStops;
-        if (!cancelled) setCompareGridData(data);
+        if (requestId === compareRequestIdRef.current) setCompareGridData(data);
       } catch {
-        if (!cancelled) setCompareGridData(null);
+        if (requestId === compareRequestIdRef.current) setCompareGridData(null);
       } finally {
-        if (!cancelled) setCompareGridLoading(false);
+        if (requestId === compareRequestIdRef.current) setCompareGridLoading(false);
       }
     })();
-    return () => { cancelled = true; };
-  }, [compareMode, compareModel, selectedParam, fhour, bbox]);
+    return () => { compareRequestIdRef.current += 1; };
+  }, [compareMode, compareModel, selectedParam, fhour, bbox, parameterCategories]);
 
   /* ── Animation loop ────────────────────────────────────── */
   useEffect(() => {
