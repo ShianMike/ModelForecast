@@ -162,12 +162,13 @@ The Vite dev server proxies `/api` requests to the backend at `localhost:5001`.
 | **Frontend** | GitHub Pages | `https://shianmike.github.io/ModelForecast/` |
 
 **Cloud Run config:** 1 GiB memory, 1 vCPU, max 2 instances, 300 s timeout, 10 concurrency.
+Persistent run cache: `gs://model-forecast-run-cache-693545589581`
 
 ### Deploy Commands
 
 ```powershell
 # Backend → Cloud Run
-gcloud run deploy model-forecast --source . --project model-forecast-app --region us-central1 --platform managed --allow-unauthenticated --memory 1Gi --cpu 1 --timeout 300 --max-instances 2 --concurrency 10 --port 8080 --quiet
+gcloud run deploy model-forecast --source . --project model-forecast-app --region us-central1 --platform managed --allow-unauthenticated --memory 1Gi --cpu 1 --timeout 300 --max-instances 2 --concurrency 10 --port 8080 --set-env-vars "GUNICORN_THREADS=4,WEB_CONCURRENCY=2,FORECAST_CACHE_BUCKET=model-forecast-run-cache-693545589581" --quiet
 
 # Frontend → GitHub Pages
 .\deploy.ps1

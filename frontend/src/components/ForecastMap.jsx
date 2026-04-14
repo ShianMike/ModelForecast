@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState, useCallback } from "react";
-import { MapPin } from "lucide-react";
 import CanvasOverlay from "./CanvasOverlay";
 import "./ForecastMap.css";
 
@@ -10,11 +9,35 @@ const DARK_TILES = "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.pn
 const LIGHT_TILES = "https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png";
 const TILE_ATTR = '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a> &copy; <a href="https://carto.com/">CARTO</a>';
 
+function findNearestIndex(sortedValues, target) {
+  if (!sortedValues || sortedValues.length === 0) return -1;
+  let lo = 0;
+  let hi = sortedValues.length - 1;
+
+  while (lo < hi) {
+    const mid = Math.floor((lo + hi) / 2);
+    if (sortedValues[mid] < target) {
+      lo = mid + 1;
+    } else {
+      hi = mid;
+    }
+  }
+
+  if (lo === 0) return 0;
+  const prev = lo - 1;
+  return Math.abs(sortedValues[lo] - target) < Math.abs(sortedValues[prev] - target)
+    ? lo
+    : prev;
+}
+
 export default function ForecastMap({ gridData, loading, error, bbox, parameter, overlayOpacity, validTime, model, onMapReady, onMapClick, showContours }) {
   const mapContainerRef = useRef(null);
   const mapRef = useRef(null);
   const tileRef = useRef(null);
   const canvasRef = useRef(null);
+  const hoverFrameRef = useRef(null);
+  const hoverEventRef = useRef(null);
+  const cursorStateRef = useRef({ value: null, x: null, y: null });
   const [cursorValue, setCursorValue] = useState(null);
   const [cursorPos, setCursorPos] = useState(null);
 
@@ -67,43 +90,68 @@ export default function ForecastMap({ gridData, loading, error, bbox, parameter,
       setCursorValue(null);
       return;
     }
-    const { lat, lng } = e.latlng;
-    const lats = gridData.lats;
-    const lons = gridData.lons;
-    const vals = gridData.values;
-    const is2D = Array.isArray(vals[0]);
+    hoverEventRef.current = e;
+    if (hoverFrameRef.current !== null) return;
 
-    let minDist = Infinity, val = null;
-    if (is2D) {
-      /* 2D grid: find nearest lat index, then nearest lon index */
-      let bi = 0, bj = 0;
-      let minLatD = Infinity, minLonD = Infinity;
-      for (let i = 0; i < lats.length; i++) {
-        const d = Math.abs(lats[i] - lat);
-        if (d < minLatD) { minLatD = d; bi = i; }
+    hoverFrameRef.current = window.requestAnimationFrame(() => {
+      hoverFrameRef.current = null;
+      const evt = hoverEventRef.current;
+      if (!evt) return;
+
+      const { lat, lng } = evt.latlng;
+      const lats = gridData.lats;
+      const lons = gridData.lons;
+      const vals = gridData.values;
+      const is2D = Array.isArray(vals[0]);
+
+      let val = null;
+      if (is2D) {
+        const rowIdx = findNearestIndex(lats, lat);
+        const colIdx = findNearestIndex(lons, lng);
+        val = vals[rowIdx]?.[colIdx];
+      } else {
+        let minDist = Infinity;
+        for (let i = 0; i < lats.length; i++) {
+          const d = Math.abs(lats[i] - lat) + Math.abs(lons[i] - lng);
+          if (d < minDist) {
+            minDist = d;
+            val = vals[i];
+          }
+        }
       }
-      for (let j = 0; j < lons.length; j++) {
-        const d = Math.abs(lons[j] - lng);
-        if (d < minLonD) { minLonD = d; bj = j; }
-      }
-      val = vals[bi]?.[bj];
-    } else {
-      for (let i = 0; i < lats.length; i++) {
-        const d = Math.abs(lats[i] - lat) + Math.abs(lons[i] - lng);
-        if (d < minDist) { minDist = d; val = vals[i]; }
-      }
-    }
-    setCursorValue(val != null && !isNaN(val) ? val.toFixed(1) : null);
-    setCursorPos({ x: e.containerPoint.x, y: e.containerPoint.y });
+
+      const nextValue = val != null && !isNaN(val) ? val.toFixed(1) : null;
+      const nextX = evt.containerPoint.x;
+      const nextY = evt.containerPoint.y;
+      const prev = cursorStateRef.current;
+      if (prev.value === nextValue && prev.x === nextX && prev.y === nextY) return;
+
+      cursorStateRef.current = { value: nextValue, x: nextX, y: nextY };
+      setCursorValue(nextValue);
+      setCursorPos({ x: nextX, y: nextY });
+    });
   }, [gridData]);
 
   useEffect(() => {
     if (!mapRef.current) return;
+    const handleMouseOut = () => {
+      hoverEventRef.current = null;
+      if (hoverFrameRef.current !== null) {
+        window.cancelAnimationFrame(hoverFrameRef.current);
+        hoverFrameRef.current = null;
+      }
+      cursorStateRef.current = { value: null, x: null, y: null };
+      setCursorValue(null);
+    };
     mapRef.current.on("mousemove", handleMouseMove);
-    mapRef.current.on("mouseout", () => setCursorValue(null));
+    mapRef.current.on("mouseout", handleMouseOut);
     return () => {
       mapRef.current?.off("mousemove", handleMouseMove);
-      mapRef.current?.off("mouseout");
+      mapRef.current?.off("mouseout", handleMouseOut);
+      if (hoverFrameRef.current !== null) {
+        window.cancelAnimationFrame(hoverFrameRef.current);
+        hoverFrameRef.current = null;
+      }
     };
   }, [handleMouseMove]);
 

@@ -16,6 +16,7 @@ import requests
 from datetime import datetime, timedelta, timezone
 
 from forecast.grib2 import decode_grib2
+from forecast.grid_utils import crop_and_thin_grid
 
 _session = requests.Session()
 _session.headers["User-Agent"] = "ModelForecastViewer/1.0"
@@ -386,6 +387,9 @@ def fetch_grid_forecast(model, variable, forecast_hour, bbox=None):
         ref_bytes = _download_grib(ref_url)
         ref_lats, ref_lons, ref_vals, _, _ = _decode_and_combine(ref_bytes)
         assert ref_lats is not None and ref_lons is not None
+        ref_lats, ref_lons, ref_vals, _, _ = crop_and_thin_grid(
+            ref_lats, ref_lons, ref_vals, bbox=bbox
+        )
         cycle_dt = datetime.strptime(f"{run_date}{run_cycle:02d}", "%Y%m%d%H")
         result = {
             "model": model_key,
@@ -429,6 +433,10 @@ def fetch_grid_forecast(model, variable, forecast_hour, bbox=None):
         if u_raw is not None and v_raw is not None:
             u_raw = u_raw[::-1, :]
             v_raw = v_raw[::-1, :]
+
+    lats, lons, raw_values, u_raw, v_raw = crop_and_thin_grid(
+        lats, lons, raw_values, bbox=bbox, u_component=u_raw, v_component=v_raw
+    )
 
     # Unit conversion (speed only — keep u/v in m/s for direction)
     convert = var_info["convert"]

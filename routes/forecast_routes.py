@@ -53,6 +53,23 @@ _POINT_BBOX_HALF_SPAN = {
     "hrrr": 0.20,
 }
 
+# Sounding data step — HRRR has hourly upper-air data;
+# GFS/NAM/RAP only have sounding data every 3 hours.
+_SOUNDING_STEP = {
+    "gfs": 3,
+    "hrrr": 1,
+    "nam": 3,
+    "rap": 3,
+}
+
+
+def _snap_sounding_fhour(model, fhour):
+    """Snap fhour to the nearest valid sounding hour for the model."""
+    step = _SOUNDING_STEP.get(model.lower(), 3)
+    if step <= 1:
+        return fhour
+    return round(fhour / step) * step
+
 _METEOGRAM_GROUP_A_MAP = {
     (0, 0): "tmp_k",      # TMP
     (0, 6): "dpt_k",      # DPT
@@ -1425,7 +1442,8 @@ def get_sounding():
         fhour:  forecast hour (default 0)
     """
     model = request.args.get("model", "gfs")
-    fhour = request.args.get("fhour", "0", type=int)
+    fhour_raw = request.args.get("fhour", "0", type=int)
+    fhour = _snap_sounding_fhour(model, fhour_raw)
     try:
         lat = float(request.args.get("lat", 0))
         lon = float(request.args.get("lon", 0))
@@ -1609,7 +1627,8 @@ def get_sounding_plot():
         { image (base64 PNG), params, profile, meta }
     """
     model = request.args.get("model", "gfs")
-    fhour = request.args.get("fhour", "0", type=int)
+    fhour_raw = request.args.get("fhour", "0", type=int)
+    fhour = _snap_sounding_fhour(model, fhour_raw)
     theme = request.args.get("theme", "dark")
     colorblind = request.args.get("colorblind", "false").lower() == "true"
     try:

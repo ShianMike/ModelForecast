@@ -22,6 +22,7 @@ import requests
 from datetime import datetime, timedelta, timezone
 
 from forecast.grib2 import decode_grib2
+from forecast.grid_utils import crop_and_thin_grid
 
 _session = requests.Session()
 _session.headers["User-Agent"] = "ModelForecastViewer/1.0"
@@ -425,16 +426,9 @@ def fetch_grid_forecast(model, variable, forecast_hour, bbox=None):
             u_raw = u_raw[::-1, :]
             v_raw = v_raw[::-1, :]
 
-    # Subset to bounding box
-    lat_mask = (lats >= bbox["lat_min"]) & (lats <= bbox["lat_max"])
-    lon_mask = (lons >= bbox["lon_min"]) & (lons <= bbox["lon_max"])
-    if np.any(lat_mask) and np.any(lon_mask):
-        lats = lats[lat_mask]
-        lons = lons[lon_mask]
-        raw_values = raw_values[np.ix_(lat_mask, lon_mask)]
-        if u_raw is not None:
-            u_raw = u_raw[np.ix_(lat_mask, lon_mask)]
-            v_raw = v_raw[np.ix_(lat_mask, lon_mask)]
+    lats, lons, raw_values, u_raw, v_raw = crop_and_thin_grid(
+        lats, lons, raw_values, bbox=bbox, u_component=u_raw, v_component=v_raw
+    )
 
     # Unit conversion
     convert = var_info["convert"]

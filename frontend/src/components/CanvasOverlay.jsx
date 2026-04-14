@@ -292,8 +292,10 @@ const CanvasOverlay = forwardRef(function CanvasOverlay({ map, gridData, paramet
   /* Re-draw whenever gridData changes or map moves */
   useEffect(() => {
     if (!map || !canvasRef.current || !gridData) return;
+    let frameId = null;
 
     const draw = () => {
+      frameId = null;
       const canvas = canvasRef.current;
       if (!canvas) return;
       const size = map.getSize();
@@ -403,9 +405,17 @@ const CanvasOverlay = forwardRef(function CanvasOverlay({ map, gridData, paramet
       }
     };
 
-    draw();
-    map.on("moveend zoomend", draw);
-    return () => map.off("moveend zoomend", draw);
+    const scheduleDraw = () => {
+      if (frameId !== null) return;
+      frameId = window.requestAnimationFrame(draw);
+    };
+
+    scheduleDraw();
+    map.on("moveend zoomend resize", scheduleDraw);
+    return () => {
+      if (frameId !== null) window.cancelAnimationFrame(frameId);
+      map.off("moveend zoomend resize", scheduleDraw);
+    };
   }, [map, gridData, parameter, opacity, showContours]);
 
   return null;

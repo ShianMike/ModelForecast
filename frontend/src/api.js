@@ -16,10 +16,22 @@ async function withRetry(fn, retries = 2, delayMs = 1500) {
     try {
       return await fn();
     } catch (err) {
-      if (err.rateLimited || i === retries) throw err;
+      if (err.rateLimited || err.retryable === false || i === retries) throw err;
       await new Promise((r) => setTimeout(r, delayMs));
     }
   }
+}
+
+async function readResponsePayload(res) {
+  const contentType = res.headers.get("content-type") || "";
+  if (contentType.includes("application/json")) {
+    return res.json();
+  }
+
+  const text = await res.text();
+  return {
+    error: text || `Request failed with status ${res.status}`,
+  };
 }
 
 /* Health check */
@@ -60,19 +72,28 @@ export async function fetchForecast({ model, parameter, fhour, bbox }) {
     params.set("lon_max", String(bbox.east));
     params.set("lon_min", String(bbox.west));
   }
-  const res = await fetchWithTimeout(
-    `${API_BASE}/api/forecast?${params}`,
-    {},
-    30000
-  );
-  const data = await res.json();
-  if (res.status === 429) {
-    const err = new Error(data.error || "Rate limited");
-    err.rateLimited = true;
-    throw err;
-  }
-  if (!res.ok) throw new Error(data.error || "Forecast fetch failed");
-  return data;
+  return withRetry(async () => {
+    const res = await fetchWithTimeout(
+      `${API_BASE}/api/forecast?${params}`,
+      {},
+      30000
+    );
+    const data = await readResponsePayload(res);
+
+    if (res.status === 429) {
+      const err = new Error(data.error || "Rate limited");
+      err.rateLimited = true;
+      throw err;
+    }
+
+    if (!res.ok) {
+      const err = new Error(data.error || "Forecast fetch failed");
+      err.retryable = res.status >= 500;
+      throw err;
+    }
+
+    return data;
+  }, 1, 1200);
 }
 
 /* Color scale for a parameter */
