@@ -276,6 +276,7 @@ const CanvasOverlay = forwardRef(function CanvasOverlay({ map, gridData, paramet
     if (!map) return;
     /* Create a canvas in the overlay pane */
     const pane = map.getPane("overlayPane");
+    if (!pane) return;
     const canvas = document.createElement("canvas");
     canvas.style.position = "absolute";
     canvas.style.pointerEvents = "none";

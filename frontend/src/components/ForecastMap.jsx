@@ -31,6 +31,7 @@ function findNearestIndex(sortedValues, target) {
 export default function ForecastMap({ gridData, loading, error, bbox, parameter, overlayOpacity, onMapReady, onMapClick, showContours }) {
   const mapContainerRef = useRef(null);
   const mapRef = useRef(null);
+  const onMapReadyRef = useRef(onMapReady);
   const tileRef = useRef(null);
   const canvasRef = useRef(null);
   const hoverFrameRef = useRef(null);
@@ -38,6 +39,10 @@ export default function ForecastMap({ gridData, loading, error, bbox, parameter,
   const cursorStateRef = useRef({ value: null, x: null, y: null });
   const [cursorValue, setCursorValue] = useState(null);
   const [cursorPos, setCursorPos] = useState(null);
+
+  useEffect(() => {
+    onMapReadyRef.current = onMapReady;
+  }, [onMapReady]);
 
   /* Initialize Leaflet map */
   useEffect(() => {
@@ -57,10 +62,10 @@ export default function ForecastMap({ gridData, loading, error, bbox, parameter,
     }).addTo(map);
 
     mapRef.current = map;
-    if (onMapReady) onMapReady(map);
+    if (onMapReadyRef.current) onMapReadyRef.current(map);
 
     return () => { map.remove(); mapRef.current = null; };
-  }, [onMapReady]);
+  }, []);
 
   /* Update tiles on theme change */
   useEffect(() => {
