@@ -18,16 +18,22 @@ log = logging.getLogger(__name__)
 
 # ─── Allowed origins ───────────────────────────────────────
 ALLOWED_ORIGINS = [
+    "https://modelforecastpy.app",
+    "https://www.modelforecastpy.app",
     "https://shianmike.github.io",
-    "http://localhost:3000",
-    "http://localhost:3001",
-    "http://localhost:3002",
-    "http://localhost:5001",
-    "http://127.0.0.1:3000",
-    "http://127.0.0.1:3001",
-    "http://127.0.0.1:3002",
-    "http://127.0.0.1:5001",
+    "https://model-forecast-693545589581.us-central1.run.app",
 ]
+if not bool(os.environ.get("K_SERVICE")):
+    ALLOWED_ORIGINS += [
+        "http://localhost:3000",
+        "http://localhost:3001",
+        "http://localhost:3002",
+        "http://localhost:5001",
+        "http://127.0.0.1:3000",
+        "http://127.0.0.1:3001",
+        "http://127.0.0.1:3002",
+        "http://127.0.0.1:5001",
+    ]
 
 app = Flask(__name__, static_folder=FRONTEND_DIR, static_url_path="")
 
@@ -48,6 +54,8 @@ csp = {
                    "https://server.arcgisonline.com https://tilecache.rainviewer.com",
     "connect-src": "'self' https://api.open-meteo.com https://archive-api.open-meteo.com "
                    "https://ensemble-api.open-meteo.com https://api.rainviewer.com "
+                   "https://modelforecastpy.app https://www.modelforecastpy.app "
+                   "https://model-forecast-693545589581.us-central1.run.app "
                    "https://*.run.app",
     "media-src":   "'self' blob:",
     "frame-ancestors": "'none'",
