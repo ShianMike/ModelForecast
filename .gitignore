@@ -21,12 +21,14 @@ Thumbs.db
 
 # Env
 .env
-.env.*
+.env.local
+.env.*.local
+# Note: .env.production is intentionally committed (contains only public URLs)
 
 # Dev artifacts
 STYLING_PROMPT.txt
 implementation_plan.md
 .instructions.md
 
-# Old static build artifacts
-static/
+# Old static build artifacts (not used — frontend is built inside Docker)
+# static/
