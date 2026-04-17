@@ -1,7 +1,10 @@
 import unittest
+import threading
+from collections import OrderedDict
 from unittest.mock import patch
 
 from app import app
+from routes import forecast_routes
 
 
 class FakeResponse:
@@ -336,6 +339,37 @@ class ApiRouteTests(unittest.TestCase):
         self.assertEqual(payload["variable"], "simulated_reflectivity")
         self.assertEqual(payload["source_variable"], "temperature_2m")
         self.assertEqual(payload["n_members"], 3)
+
+    def test_ttl_lru_cache_set_evicts_least_recently_used_entry(self):
+        cache = OrderedDict()
+        lock = threading.Lock()
+
+        forecast_routes._ttl_lru_cache_set(cache, lock, "a", {"value": 1}, max_size=2)
+        forecast_routes._ttl_lru_cache_set(cache, lock, "b", {"value": 2}, max_size=2)
+        forecast_routes._ttl_lru_cache_get(cache, lock, "a", ttl_seconds=900)
+        forecast_routes._ttl_lru_cache_set(cache, lock, "c", {"value": 3}, max_size=2)
+
+        self.assertIn("a", cache)
+        self.assertIn("c", cache)
+        self.assertNotIn("b", cache)
+
+    def test_ttl_lru_cache_get_expires_stale_entry(self):
+        cache = OrderedDict()
+        lock = threading.Lock()
+
+        with patch("routes.forecast_routes.time.time", side_effect=[100.0, 150.0]):
+            forecast_routes._ttl_lru_cache_set(cache, lock, "x", {"value": 9}, max_size=2)
+            value = forecast_routes._ttl_lru_cache_get(cache, lock, "x", ttl_seconds=20)
+
+        self.assertIsNone(value)
+        self.assertNotIn("x", cache)
+
+    def test_social_preview_image_endpoint_returns_png(self):
+        response = self.client.get("/og-image.png")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.mimetype, "image/png")
+        self.assertGreater(len(response.data), 1024)
 
 
 if __name__ == "__main__":

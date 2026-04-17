@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <rect width="32" height="32" rx="6" fill="#1e293b"/>
+  <!-- Globe -->
+  <circle cx="14" cy="16" r="8.5" fill="none" stroke="#94a3b8" stroke-width="1.4"/>
+  <ellipse cx="14" cy="16" rx="4" ry="8.5" fill="none" stroke="#64748b" stroke-width="0.9"/>
+  <line x1="5.5" y1="16" x2="22.5" y2="16" stroke="#475569" stroke-width="0.7"/>
+  <path d="M6.5 12 Q14 10.5 21.5 12" fill="none" stroke="#475569" stroke-width="0.7"/>
+  <path d="M6.5 20 Q14 21.5 21.5 20" fill="none" stroke="#475569" stroke-width="0.7"/>
+  <!-- Trend line -->
+  <polyline points="10,23 15,16 19,19 25,9" fill="none" stroke="#38bdf8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="25" cy="9" r="1.8" fill="#38bdf8"/>
+</svg>

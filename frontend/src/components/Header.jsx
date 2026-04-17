@@ -1,7 +1,7 @@
-import { Sun, Moon, Eye, TrendingUp, GitCompareArrows, Download, Columns2, Scissors, Thermometer, Wind, BarChart3 } from "lucide-react";
+import { Sun, Moon, Eye, TrendingUp, GitCompareArrows, Download, Columns2, Scissors, Thermometer, Wind, BarChart3, Cpu } from "lucide-react";
 import "./Header.css";
 
-export default function Header({ theme, toggleTheme, colorblind, toggleColorblind, model, parameter, validTime, overlayOpacity, setOverlayOpacity, showContours, setShowContours, diffMode, setDiffMode, onExport, compareMode, setCompareMode, compareModel, setCompareModel, models, onCrossSection, showSounding, setShowSounding, showMeteogram, setShowMeteogram, showEnsemble, setShowEnsemble }) {
+export default function Header({ theme, toggleTheme, colorblind, toggleColorblind, model, parameter, validTime, overlayOpacity, setOverlayOpacity, showContours, setShowContours, showWindParticles, setShowWindParticles, useWebGL, setUseWebGL, diffMode, setDiffMode, onExport, compareMode, setCompareMode, compareModel, setCompareModel, models, onCrossSection, showSounding, setShowSounding, showMeteogram, setShowMeteogram, showEnsemble, setShowEnsemble }) {
   const paramLabel = parameter?.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase()) || "";
   return (
     <header className="header">
@@ -25,6 +25,12 @@ export default function Header({ theme, toggleTheme, colorblind, toggleColorblin
         </div>
         <button className="btn-icon" onClick={() => setShowContours(v => !v)} title="Toggle contour lines">
           <TrendingUp size={14} style={showContours ? { color: "var(--accent)" } : {}} />
+        </button>
+        <button className="btn-icon" onClick={() => setShowWindParticles(v => !v)} title="Toggle wind particle animation">
+          <Wind size={14} style={showWindParticles ? { color: "var(--accent)" } : {}} />
+        </button>
+        <button className="btn-icon" onClick={() => setUseWebGL(v => !v)} title="Toggle WebGL rendering (Deck.gl)">
+          <Cpu size={14} style={useWebGL ? { color: "var(--accent)" } : {}} />
         </button>
         <button className="btn-icon" onClick={() => setDiffMode(v => !v)} title="Toggle difference mode (change from previous frame)">
           <GitCompareArrows size={14} style={diffMode ? { color: "var(--accent)" } : {}} />

@@ -26,7 +26,7 @@ function valueColor(val, min, max) {
   return `rgb(${r},${g},${b})`;
 }
 
-export default function CrossSection({ data, loading, line, model, onClose, onStartDraw }) {
+export default function CrossSection({ data, loading, progress, line, model, onClose, onStartDraw }) {
   const { offset, handleMouseDown } = useDraggable();
   const [collapsed, setCollapsed] = useState(false);
   const dragStyle = { transform: `translate(${offset.x}px, ${offset.y}px)` };
@@ -50,13 +50,22 @@ export default function CrossSection({ data, loading, line, model, onClose, onSt
   }
 
   if (loading) {
+    const pct = progress ? Math.round((progress.completed / progress.total) * 100) : 0;
     return (
       <div className="cross-section card fade-in" style={dragStyle}>
         <div className="cross-header drag-handle" onMouseDown={handleMouseDown}>
-          <span>Loading cross-section…</span>
+          <span>Loading cross-section{progress ? ` (${pct}%)` : "…"}</span>
           <button className="btn-icon" onClick={onClose}><X size={14} /></button>
         </div>
-        <div className="cross-loading"><div className="spinner" /></div>
+        <div className="cross-loading">
+          {progress ? (
+            <div className="cross-progress">
+              <div className="cross-progress-bar" style={{ width: `${pct}%` }} />
+            </div>
+          ) : (
+            <div className="spinner" />
+          )}
+        </div>
       </div>
     );
   }

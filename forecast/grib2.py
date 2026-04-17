@@ -7,11 +7,42 @@ Supports:
   - Packing template 5.40 (JPEG2000 via Pillow)
 
 Only what's needed for NOAA GFS/NAM/HRRR/RAP GRIB filter output.
-No C library dependencies.
+No C library dependencies.  Optionally accelerated by Numba.
 """
 
 import struct
 import numpy as np
+
+# Numba JIT — optional; graceful fallback to plain Python if unavailable.
+try:
+    from numba import njit
+except ImportError:  # pragma: no cover
+    def njit(*args, **kwargs):
+        """No-op decorator when numba is not installed."""
+        def _passthrough(fn):
+            return fn
+        if args and callable(args[0]):
+            return args[0]
+        return _passthrough
+
+
+# ─── Numba-accelerated spatial differencing ────────────────
+
+@njit(cache=True)
+def _spatial_diff_order1(result, val_idx, ival1):
+    """Reverse first-order spatial differencing (cumulative sum)."""
+    result[0] = ival1
+    for i in range(1, val_idx):
+        result[i] = result[i] + result[i - 1]
+
+
+@njit(cache=True)
+def _spatial_diff_order2(result, val_idx, ival1, ival2):
+    """Reverse second-order spatial differencing."""
+    result[0] = ival1
+    result[1] = ival2
+    for i in range(2, val_idx):
+        result[i] = result[i] + 2 * result[i - 1] - result[i - 2]
 
 
 def _signed16(raw):
@@ -107,7 +138,11 @@ def _decode_message(data):
         lats, lons, values_2d = _lambert_to_regular(grid, values_2d)
     else:
         lats = np.linspace(grid["la1"], grid["la2"], Nj)
-        lons = np.linspace(grid["lo1"], grid["lo2"], Ni)
+        lo1, lo2 = grid["lo1"], grid["lo2"]
+        # Handle longitude wrap-around (e.g. ECMWF: lo1=180, lo2=179.75)
+        if lo2 < lo1:
+            lo2 += 360.0
+        lons = np.linspace(lo1, lo2, Ni)
 
     return {
         "category": product.get("category", -1) if product else -1,
@@ -324,6 +359,16 @@ def _parse_packing(data, pos):
         if tmpl == 3:
             info["spatial_order"] = data[pos + 47]
             info["extra_octets"] = data[pos + 48]
+    # CCSDS/AEC packing (5.42)
+    if tmpl == 42:
+        # Octet 21: type of original field values (0=float, 1=int)
+        info["ccsds_orig_type"] = data[pos + 20]
+        # Octet 22: CCSDS compression options mask (maps to AEC flags)
+        info["ccsds_options_mask"] = data[pos + 21]
+        # Octet 23: block size (J)
+        info["ccsds_block_size"] = data[pos + 22]
+        # Octets 24-25: reference sample interval (RSI)
+        info["ccsds_rsi"] = struct.unpack(">H", data[pos + 23 : pos + 25])[0]
     return info
 
 
@@ -359,6 +404,8 @@ def _unpack_data(packed_data, packing):
         return _unpack_complex(packed_data, packing)
     elif tmpl == 40:
         return _unpack_jpeg2000(packed_data, nvals)
+    elif tmpl == 42:
+        return _unpack_ccsds(packed_data, nvals, nbits, packing)
     else:
         raise ValueError(f"Unsupported packing template 5.{tmpl}")
 
@@ -383,6 +430,36 @@ def _unpack_jpeg2000(packed_data, nvals):
     img = Image.open(io.BytesIO(packed_data))
     arr = np.array(img).flatten().astype(np.int64)
     return arr[:nvals]
+
+
+def _unpack_ccsds(packed_data, nvals, nbits, packing):
+    """Template 5.42 — CCSDS/AEC (Adaptive Entropy Coding) decompression.
+
+    Uses imagecodecs.aec_decode for decompression.
+    """
+    from imagecodecs import aec_decode
+
+    block_size = packing.get("ccsds_block_size", 32)
+    rsi = packing.get("ccsds_rsi", 128)
+    # The options mask from the GRIB2 file maps directly to libaec AEC flags
+    flags = packing.get("ccsds_options_mask", 14)
+
+    decoded = aec_decode(
+        packed_data,
+        bitspersample=nbits,
+        blocksize=block_size,
+        rsi=rsi,
+        flags=flags,
+    )
+    # Determine dtype from bits per sample
+    if nbits <= 8:
+        dtype = ">u1"
+    elif nbits <= 16:
+        dtype = ">u2"
+    else:
+        dtype = ">u4"
+    arr = np.frombuffer(decoded, dtype=dtype)
+    return arr[:nvals].astype(np.int64)
 
 
 def _extract_n_bits(all_bits, bit_offset, n_values, n_bits):
@@ -479,14 +556,9 @@ def _unpack_complex(packed_data, packing):
 
     # ── 5. Reverse spatial differencing (template 5.3) ──
     if spatial_order == 1 and val_idx > 0:
-        result[0] = ival1
-        for i in range(1, val_idx):
-            result[i] = result[i] + result[i - 1]
+        _spatial_diff_order1(result, val_idx, ival1)
     elif spatial_order == 2 and val_idx > 1:
-        result[0] = ival1
-        result[1] = ival2
-        for i in range(2, val_idx):
-            result[i] = result[i] + 2 * result[i - 1] - result[i - 2]
+        _spatial_diff_order2(result, val_idx, ival1, ival2)
 
     return result[:nvals]
 

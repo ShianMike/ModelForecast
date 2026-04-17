@@ -54,6 +54,8 @@ csp = {
                    "https://server.arcgisonline.com https://tilecache.rainviewer.com",
     "connect-src": "'self' https://api.open-meteo.com https://archive-api.open-meteo.com "
                    "https://ensemble-api.open-meteo.com https://api.rainviewer.com "
+                   "https://*.basemaps.cartocdn.com https://*.tile.openstreetmap.org "
+                   "https://server.arcgisonline.com https://tilecache.rainviewer.com "
                    "https://modelforecastpy.app https://www.modelforecastpy.app "
                    "https://model-forecast-693545589581.us-central1.run.app "
                    "https://*.run.app",

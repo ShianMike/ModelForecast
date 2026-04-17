@@ -340,15 +340,34 @@ def _build_filter_url(model, variable, forecast_hour, bbox, run_date=None, run_c
 
 # ─── GRIB2 download + decode ──────────────────────────────
 
-def _download_grib(url):
-    """Download a GRIB2 subset from NOMADS."""
-    resp = _session.get(url, timeout=30)
-    if resp.status_code == 404:
-        raise FileNotFoundError("NOMADS data not yet available for this run/hour")
-    resp.raise_for_status()
-    if len(resp.content) < 50 or resp.content[:4] != b"GRIB":
-        raise ValueError("Invalid GRIB response from NOMADS")
-    return resp.content
+def _download_grib(url, retries=2):
+    """Download a GRIB2 subset from NOMADS with retry on transient errors.
+
+    Retries up to *retries* times on HTTP 429, 500, 502, 503, 504 before
+    giving up.  HTTP 403 and 404 are raised immediately (no retry).
+    """
+    _TRANSIENT_CODES = {429, 500, 502, 503, 504}
+    last_exc = None
+    for attempt in range(1 + retries):
+        try:
+            resp = _session.get(url, timeout=30)
+            if resp.status_code == 404:
+                raise FileNotFoundError("NOMADS data not yet available for this run/hour")
+            if resp.status_code == 403:
+                raise PermissionError(f"NOMADS returned 403 Forbidden for {url}")
+            if resp.status_code in _TRANSIENT_CODES and attempt < retries:
+                continue  # retry
+            resp.raise_for_status()
+            if len(resp.content) < 50 or resp.content[:4] != b"GRIB":
+                raise ValueError("Invalid GRIB response from NOMADS")
+            return resp.content
+        except (FileNotFoundError, PermissionError):
+            raise
+        except Exception as exc:
+            last_exc = exc
+            if attempt >= retries:
+                raise
+    raise last_exc  # pragma: no cover
 
 
 def _decode_and_combine(grib_bytes, is_wind=False):

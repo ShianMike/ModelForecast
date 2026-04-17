@@ -11,6 +11,7 @@ import EnsemblePlume from "./components/EnsemblePlume";
 import { validZuluLabel } from "./timeUtils";
 
 import { fetchModels, fetchParameters, fetchForecast, fetchColorScale, fetchMeteogram, fetchSoundingPlot, fetchCrossSection, fetchEnsemble } from "./api";
+import GridWorker from "./workers/gridWorker?worker";
 
 /* Resolve the cmap name for a parameter from the categories metadata */
 const PARAM_CMAP_FALLBACK = {
@@ -94,6 +95,37 @@ function saveCustomRegions(regions) {
   try { localStorage.setItem("mf_custom_regions", JSON.stringify(regions)); } catch { /* noop */ }
 }
 
+const DIFF_SCALE = [
+  [-20, 0, 0, 200, 255],
+  [-10, 50, 100, 255, 220],
+  [-5, 100, 180, 255, 180],
+  [-1, 180, 220, 255, 120],
+  [0, 255, 255, 255, 40],
+  [1, 255, 220, 180, 120],
+  [5, 255, 180, 100, 180],
+  [10, 255, 100, 50, 220],
+  [20, 200, 0, 0, 255],
+];
+
+function computeDiffValuesSync(vals, prevVals) {
+  if (!Array.isArray(vals) || !Array.isArray(prevVals)) return null;
+  const is2D = Array.isArray(vals[0]);
+  if (is2D) {
+    return vals.map((row, i) =>
+      row.map((v, j) => {
+        const pv = prevVals[i]?.[j];
+        if (!Number.isFinite(v) || !Number.isFinite(pv)) return null;
+        return v - pv;
+      })
+    );
+  }
+  return vals.map((v, i) => {
+    const pv = prevVals[i];
+    if (!Number.isFinite(v) || !Number.isFinite(pv)) return null;
+    return v - pv;
+  });
+}
+
 export default function App() {
   /* ── Theme ─────────────────────────────────────────────── */
   const [theme, setThemeState] = useState(() => loadPref("mf_theme", "dark"));
@@ -172,6 +204,8 @@ export default function App() {
   const [gridError, setGridError] = useState(null);
   const [overlayOpacity, setOverlayOpacity] = useState(0.5);
   const [showContours, setShowContours] = useState(false);
+  const [showWindParticles, setShowWindParticles] = useState(true);
+  const [useWebGL, setUseWebGL] = useState(false);
   const [diffMode, setDiffMode] = useState(false); /* show field differences between frames */
 
   /* ── Resolve parameter display name & unit from categories ── */
@@ -186,140 +220,216 @@ export default function App() {
 
   /* ── Export current map view as PNG ────────────────────── */
   const handleExport = useCallback(async () => {
-    const el = document.querySelector(".forecast-map");
-    if (!el) return;
-    try {
-      const { default: html2canvas } = await import("html2canvas-pro");
-      const mapCanvas = await html2canvas(el, {
-        useCORS: true,
-        allowTaint: true,
-        backgroundColor: null,
-        scale: 2,
-      });
+    const maps = document.querySelectorAll(".forecast-map");
+    if (!maps.length) return;
 
-      const W = mapCanvas.width;
-      const H = mapCanvas.height;
-      const PAD = 16;
-      const scale = W / el.offsetWidth; /* retina scale factor */
+    /**
+     * Manually compose a screenshot of a Leaflet map element.
+     * html-to-image cannot capture cross-origin tile images, so we:
+     *   1. Draw the map background colour.
+     *   2. Re-fetch each tile <img> with crossOrigin="anonymous" (CartoCDN supports CORS)
+     *      so the browser issues a fresh CORS request, separate from the non-CORS cache entry.
+     *   3. Draw every <canvas> inside the container (CanvasOverlay, deck.gl, etc.)
+     *      using getBoundingClientRect to get the correct on-screen position.
+     */
+    const SCALE = 2;
+    const captureMapEl = async (mapEl) => {
+      const rect = mapEl.getBoundingClientRect();
+      const W = Math.round(rect.width);
+      const H = Math.round(rect.height);
 
-      /* Compose a new canvas with annotations */
       const out = document.createElement("canvas");
-      out.width = W;
-      out.height = H;
+      out.width = W * SCALE;
+      out.height = H * SCALE;
       const ctx = out.getContext("2d");
+      ctx.scale(SCALE, SCALE);
 
-      /* Draw the map screenshot */
-      ctx.drawImage(mapCanvas, 0, 0);
+      // Background
+      const isDark = document.documentElement.getAttribute("data-theme") !== "light";
+      ctx.fillStyle = isDark ? "#1a1a2e" : "#e8e8e8";
+      ctx.fillRect(0, 0, W, H);
 
-      /* ── Top-left: parameter name ────────────────────────── */
-      const titleText = `${paramInfo.name}${paramInfo.unit ? ` (${paramInfo.unit})` : ""}`;
-      const titleFontSize = Math.round(16 * scale);
-      ctx.font = `bold ${titleFontSize}px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`;
-      const titleMetrics = ctx.measureText(titleText);
-      const titlePadH = Math.round(12 * scale);
-      const titlePadV = Math.round(8 * scale);
-      const titleX = PAD * scale;
-      const titleY = PAD * scale;
-      ctx.fillStyle = "rgba(0,0,0,0.7)";
-      ctx.beginPath();
-      const titleBoxW = titleMetrics.width + titlePadH * 2;
-      const titleBoxH = titleFontSize + titlePadV * 2;
-      const titleR = 6 * scale;
-      ctx.roundRect(titleX, titleY, titleBoxW, titleBoxH, titleR);
-      ctx.fill();
-      ctx.fillStyle = "#ffffff";
-      ctx.textBaseline = "middle";
-      ctx.textAlign = "left";
-      ctx.fillText(titleText, titleX + titlePadH, titleY + titleBoxH / 2);
+      // Tile images — re-fetched with CORS so they can be drawn on canvas
+      const tileImgs = mapEl.querySelectorAll(".leaflet-tile-pane img.leaflet-tile-loaded");
+      await Promise.all(Array.from(tileImgs).map(async (tileImg) => {
+        const tr = tileImg.getBoundingClientRect();
+        const x = tr.left - rect.left;
+        const y = tr.top - rect.top;
+        const w = tr.width;
+        const h = tr.height;
+        if (w <= 0 || h <= 0) return;
+        const img = new Image();
+        img.crossOrigin = "anonymous";
+        await new Promise((res) => { img.onload = res; img.onerror = res; img.src = tileImg.src; });
+        if (img.naturalWidth > 0) ctx.drawImage(img, x, y, w, h);
+      }));
 
-      /* ── Bottom-left: model + valid time ─────────────────── */
-      const modelLabel = selectedModel?.toUpperCase() || "";
-      const fhourLabel = `F${String(fhour).padStart(3, "0")}`;
-      const zuluLabel = validZuluLabel(fhour, gridData?.valid_time, gridData?.run);
-      const stampText = `${modelLabel}  ${fhourLabel}  ${zuluLabel}`;
-      const stampFontSize = Math.round(13 * scale);
-      ctx.font = `bold ${stampFontSize}px "SF Mono", "Cascadia Code", "Consolas", monospace`;
-      const stampMetrics = ctx.measureText(stampText);
-      const stampPadH = Math.round(10 * scale);
-      const stampPadV = Math.round(6 * scale);
-      const stampBoxW = stampMetrics.width + stampPadH * 2;
-      const stampBoxH = stampFontSize + stampPadV * 2;
-      const stampX = PAD * scale;
-      const stampY = H - PAD * scale - stampBoxH;
-      ctx.fillStyle = "rgba(0,0,0,0.7)";
-      ctx.beginPath();
-      ctx.roundRect(stampX, stampY, stampBoxW, stampBoxH, 6 * scale);
-      ctx.fill();
-      ctx.fillStyle = "#ffffff";
-      ctx.textBaseline = "middle";
-      ctx.textAlign = "left";
-      ctx.fillText(stampText, stampX + stampPadH, stampY + stampBoxH / 2);
-
-      /* ── Bottom-right: color legend ──────────────────────── */
-      const stops = gridData?.color_scale;
-      if (stops && stops.length >= 2) {
-        const barW = Math.round(220 * scale);
-        const barH = Math.round(12 * scale);
-        const legendPad = Math.round(10 * scale);
-        const legendGap = Math.round(4 * scale);
-        const labelFontSize = Math.round(10 * scale);
-        ctx.font = `bold ${labelFontSize}px "SF Mono", "Cascadia Code", "Consolas", monospace`;
-
-        /* Pick ~7 tick stops */
-        const tickStep = Math.max(1, Math.floor(stops.length / 6));
-        const ticks = stops.filter((_, i) => i % tickStep === 0 || i === stops.length - 1);
-
-        const boxW = barW + legendPad * 2;
-        const boxH = barH + legendGap + labelFontSize + legendPad * 2;
-        const boxX = W - PAD * scale - boxW;
-        const boxY = H - PAD * scale - boxH;
-
-        ctx.fillStyle = "rgba(0,0,0,0.7)";
-        ctx.beginPath();
-        ctx.roundRect(boxX, boxY, boxW, boxH, 6 * scale);
-        ctx.fill();
-
-        /* Draw gradient bar */
-        const barX = boxX + legendPad;
-        const barY = boxY + legendPad;
-        const grad = ctx.createLinearGradient(barX, 0, barX + barW, 0);
-        for (let i = 0; i < stops.length; i++) {
-          const t = i / (stops.length - 1);
-          const s = stops[i];
-          grad.addColorStop(t, `rgb(${s[1]},${s[2]},${s[3]})`);
-        }
-        ctx.fillStyle = grad;
-        ctx.fillRect(barX, barY, barW, barH);
-        ctx.strokeStyle = "rgba(255,255,255,0.3)";
-        ctx.lineWidth = 1;
-        ctx.strokeRect(barX, barY, barW, barH);
-
-        /* Tick labels */
-        ctx.fillStyle = "rgba(255,255,255,0.9)";
-        ctx.font = `${labelFontSize}px "SF Mono", "Cascadia Code", "Consolas", monospace`;
-        ctx.textBaseline = "top";
-        ctx.textAlign = "center";
-        for (const tick of ticks) {
-          const t = stops.indexOf(tick) / (stops.length - 1);
-          const x = barX + t * barW;
-          ctx.fillText(String(tick[0]), x, barY + barH + legendGap);
-        }
+      // All canvases (CanvasOverlay, deck.gl, leaflet-velocity, etc.)
+      const canvases = mapEl.querySelectorAll("canvas");
+      for (const c of canvases) {
+        try {
+          const cr = c.getBoundingClientRect();
+          if (cr.width <= 0 || cr.height <= 0) continue;
+          const cx = cr.left - rect.left;
+          const cy = cr.top - rect.top;
+          ctx.drawImage(c, cx, cy, cr.width, cr.height);
+        } catch { /* tainted or zero-size canvas — skip */ }
       }
 
-      const link = document.createElement("a");
-      link.download = `${selectedModel}_${selectedParam}_F${String(fhour).padStart(3, "0")}.png`;
-      link.href = out.toDataURL("image/png");
-      link.click();
-    } catch {
-      /* Fallback: export just the overlay canvas */
-      const cvs = document.querySelector(".forecast-map canvas");
-      if (!cvs) return;
-      const link = document.createElement("a");
-      link.download = `${selectedModel}_${selectedParam}_F${String(fhour).padStart(3, "0")}.png`;
-      link.href = cvs.toDataURL("image/png");
-      link.click();
+      return out;
+    };
+
+      /* Helper: draw annotations onto a canvas context at a given x-offset */
+      const annotatePanel = (ctx, xOff, W, H, scale, modelLabel, zuluStr) => {
+        const PAD = 16;
+
+        /* Top-left: parameter name */
+        const titleText = `${paramInfo.name}${paramInfo.unit ? ` (${paramInfo.unit})` : ""}`;
+        const titleFontSize = Math.round(16 * scale);
+        ctx.font = `bold ${titleFontSize}px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`;
+        const titleMetrics = ctx.measureText(titleText);
+        const titlePadH = Math.round(12 * scale);
+        const titlePadV = Math.round(8 * scale);
+        const titleX = xOff + PAD * scale;
+        const titleY = PAD * scale;
+        const titleBoxW = titleMetrics.width + titlePadH * 2;
+        const titleBoxH = titleFontSize + titlePadV * 2;
+        ctx.fillStyle = "rgba(0,0,0,0.7)";
+        ctx.beginPath();
+        ctx.roundRect(titleX, titleY, titleBoxW, titleBoxH, 6 * scale);
+        ctx.fill();
+        ctx.fillStyle = "#ffffff";
+        ctx.textBaseline = "middle";
+        ctx.textAlign = "left";
+        ctx.fillText(titleText, titleX + titlePadH, titleY + titleBoxH / 2);
+
+        /* Bottom-left: model + valid time */
+        const fhourLabel = `F${String(fhour).padStart(3, "0")}`;
+        const stampText = `${modelLabel}  ${fhourLabel}  ${zuluStr}`;
+        const stampFontSize = Math.round(13 * scale);
+        ctx.font = `bold ${stampFontSize}px "SF Mono", "Cascadia Code", "Consolas", monospace`;
+        const stampMetrics = ctx.measureText(stampText);
+        const stampPadH = Math.round(10 * scale);
+        const stampPadV = Math.round(6 * scale);
+        const stampBoxW = stampMetrics.width + stampPadH * 2;
+        const stampBoxH = stampFontSize + stampPadV * 2;
+        const stampX = xOff + PAD * scale;
+        const stampY = H - PAD * scale - stampBoxH;
+        ctx.fillStyle = "rgba(0,0,0,0.7)";
+        ctx.beginPath();
+        ctx.roundRect(stampX, stampY, stampBoxW, stampBoxH, 6 * scale);
+        ctx.fill();
+        ctx.fillStyle = "#ffffff";
+        ctx.textBaseline = "middle";
+        ctx.textAlign = "left";
+        ctx.fillText(stampText, stampX + stampPadH, stampY + stampBoxH / 2);
+
+        /* Bottom-right: color legend */
+        const stops = gridData?.color_scale;
+        if (stops && stops.length >= 2) {
+          const barW = Math.round(220 * scale);
+          const barH = Math.round(12 * scale);
+          const legendPad = Math.round(10 * scale);
+          const legendGap = Math.round(4 * scale);
+          const labelFontSize = Math.round(10 * scale);
+          ctx.font = `bold ${labelFontSize}px "SF Mono", "Cascadia Code", "Consolas", monospace`;
+
+          const tickStep = Math.max(1, Math.floor(stops.length / 6));
+          const ticks = stops.filter((_, i) => i % tickStep === 0 || i === stops.length - 1);
+
+          const boxW = barW + legendPad * 2;
+          const boxH = barH + legendGap + labelFontSize + legendPad * 2;
+          const boxX = xOff + W - PAD * scale - boxW;
+          const boxY = H - PAD * scale - boxH;
+
+          ctx.fillStyle = "rgba(0,0,0,0.7)";
+          ctx.beginPath();
+          ctx.roundRect(boxX, boxY, boxW, boxH, 6 * scale);
+          ctx.fill();
+
+          const barX = boxX + legendPad;
+          const barY = boxY + legendPad;
+          const grad = ctx.createLinearGradient(barX, 0, barX + barW, 0);
+          for (let i = 0; i < stops.length; i++) {
+            const t = i / (stops.length - 1);
+            const s = stops[i];
+            grad.addColorStop(t, `rgb(${s[1]},${s[2]},${s[3]})`);
+          }
+          ctx.fillStyle = grad;
+          ctx.fillRect(barX, barY, barW, barH);
+          ctx.strokeStyle = "rgba(255,255,255,0.3)";
+          ctx.lineWidth = 1;
+          ctx.strokeRect(barX, barY, barW, barH);
+
+          ctx.fillStyle = "rgba(255,255,255,0.9)";
+          ctx.font = `${labelFontSize}px "SF Mono", "Cascadia Code", "Consolas", monospace`;
+          ctx.textBaseline = "top";
+          ctx.textAlign = "center";
+          for (const tick of ticks) {
+            const t = stops.indexOf(tick) / (stops.length - 1);
+            const x = barX + t * barW;
+            ctx.fillText(String(tick[0]), x, barY + barH + legendGap);
+          }
+        }
+      };
+
+    try {
+      const isCompare = compareMode && maps.length >= 2;
+
+      /* Capture the primary map */
+      const primaryEl = maps[0];
+      const primaryCanvas = await captureMapEl(primaryEl);
+      const W = primaryCanvas.width;
+      const H = primaryCanvas.height;
+      const scale = SCALE; // captureMapEl always uses SCALE=2
+
+      if (isCompare) {
+        /* Capture the comparison map */
+        const compareEl = maps[1];
+        const compareCanvas = await captureMapEl(compareEl);
+        const W2 = compareCanvas.width;
+        const H2 = compareCanvas.height;
+        const GAP = Math.round(4 * scale);
+
+        const out = document.createElement("canvas");
+        out.width = W + GAP + W2;
+        out.height = Math.max(H, H2);
+        const ctx = out.getContext("2d");
+
+        /* Dark background for the gap */
+        ctx.fillStyle = "#1a1a2e";
+        ctx.fillRect(0, 0, out.width, out.height);
+
+        /* Draw both maps */
+        ctx.drawImage(primaryCanvas, 0, 0, W, H);
+        ctx.drawImage(compareCanvas, W + GAP, 0, W2, H2);
+
+        /* Annotate each panel */
+        const primaryZulu = validZuluLabel(fhour, gridData?.valid_time, gridData?.run);
+        annotatePanel(ctx, 0, W, H, scale, selectedModel?.toUpperCase() || "", primaryZulu);
+
+        const compareZulu = validZuluLabel(fhour, compareGridData?.valid_time, compareGridData?.run);
+        annotatePanel(ctx, W + GAP, W2, H2, scale, compareModel?.toUpperCase() || "", compareZulu);
+
+        const link = document.createElement("a");
+        link.download = `${selectedModel}_vs_${compareModel}_${selectedParam}_F${String(fhour).padStart(3, "0")}.png`;
+        link.href = out.toDataURL("image/png");
+        link.click();
+      } else {
+        /* Single map export — annotate directly on the captured canvas */
+        const ctx = primaryCanvas.getContext("2d");
+        const zuluLabel = validZuluLabel(fhour, gridData?.valid_time, gridData?.run);
+        annotatePanel(ctx, 0, W, H, scale, selectedModel?.toUpperCase() || "", zuluLabel);
+
+        const link = document.createElement("a");
+        link.download = `${selectedModel}_${selectedParam}_F${String(fhour).padStart(3, "0")}.png`;
+        link.href = primaryCanvas.toDataURL("image/png");
+        link.click();
+      }
+    } catch (err) {
+      console.error("Export failed:", err);
     }
-  }, [selectedModel, selectedParam, fhour, paramInfo, gridData]);
+  }, [selectedModel, selectedParam, fhour, paramInfo, gridData, compareMode, compareModel, compareGridData]);
 
   /* Write URL hash when state changes */
   useEffect(() => {
@@ -338,6 +448,7 @@ export default function App() {
   /* ── Cross-section state ───────────────────────────────── */
   const [crossData, setCrossData] = useState(null);
   const [crossLoading, setCrossLoading] = useState(false);
+  const [crossProgress, setCrossProgress] = useState(null);
   const [crossDrawMode, setCrossDrawMode] = useState(false);
   const crossLineRef = useRef([]); // collected [latlng, latlng]
 
@@ -490,17 +601,20 @@ export default function App() {
         setCrossDrawMode(false);
         crossLineRef.current = [];
         setCrossLoading(true);
+        setCrossProgress(null);
         setActivePanel("cross");
         try {
           const data = await fetchCrossSection({
             model: selectedModel, variable: selectedParam, fhour,
             lat1: p1.lat, lon1: p1.lon, lat2: p2.lat, lon2: p2.lon,
+            onProgress: setCrossProgress,
           });
           setCrossData(data);
         } catch {
           setCrossData(null);
         } finally {
           setCrossLoading(false);
+          setCrossProgress(null);
         }
       }
       return;
@@ -537,13 +651,46 @@ export default function App() {
   const [playing, setPlaying] = useState(false);
   const [animSpeed, setAnimSpeed] = useState(1);
   const animRef = useRef(null);
+  const diffWorkerRef = useRef(null);
+  const diffRequestIdRef = useRef(0);
 
   /* ── Client-side frame cache (avoids re-fetching viewed frames) ── */
   const frameCacheRef = useRef(new Map());
+  const prefetchInFlightRef = useRef(new Set());
+  const FRAME_CACHE_MAX = 200;
   const frameCacheKey = (m, p, h, r) => `${m}:${p}:${h}:${r}`;
+
+  const frameCacheGet = useCallback((key) => {
+    const cache = frameCacheRef.current;
+    if (!cache.has(key)) return null;
+    const value = cache.get(key);
+    /* Access updates insertion order so the map behaves as true LRU. */
+    cache.delete(key);
+    cache.set(key, value);
+    return value;
+  }, []);
+
+  const frameCacheSet = useCallback((key, data) => {
+    const cache = frameCacheRef.current;
+    if (cache.has(key)) cache.delete(key);
+    cache.set(key, data);
+    while (cache.size > FRAME_CACHE_MAX) {
+      const oldest = cache.keys().next().value;
+      cache.delete(oldest);
+    }
+  }, [FRAME_CACHE_MAX]);
 
   /* ── Color scale cache (per cmap name) ── */
   const colorScaleCacheRef = useRef({});
+
+  useEffect(() => {
+    const worker = new GridWorker();
+    diffWorkerRef.current = worker;
+    return () => {
+      worker.terminate();
+      diffWorkerRef.current = null;
+    };
+  }, []);
 
   /* Update model constraints when model changes */
   useEffect(() => {
@@ -577,6 +724,7 @@ export default function App() {
   /* Clear frame cache when model, param, or region changes */
   useEffect(() => {
     frameCacheRef.current.clear();
+    prefetchInFlightRef.current.clear();
   }, [selectedModel, selectedParam, region]);
 
   /* ── Fetch grid forecast (with client-side frame cache) ── */
@@ -586,7 +734,7 @@ export default function App() {
     const requestId = ++gridRequestIdRef.current;
 
     /* Hit: skip network + loading state entirely */
-    const cached = frameCacheRef.current.get(key);
+    const cached = frameCacheGet(key);
     if (cached) {
       if (requestId !== gridRequestIdRef.current) return;
       setGridData(cached);
@@ -618,25 +766,60 @@ export default function App() {
       if (csStops) data.color_scale = csStops;
 
       setGridData(data);
-      /* Store in cache (cap at 200 frames) */
-      if (frameCacheRef.current.size > 200) {
-        const oldest = frameCacheRef.current.keys().next().value;
-        frameCacheRef.current.delete(oldest);
-      }
-      frameCacheRef.current.set(key, data);
+      frameCacheSet(key, data);
     } catch (err) {
       if (requestId !== gridRequestIdRef.current) return;
       setGridError(err.message);
     } finally {
       if (requestId === gridRequestIdRef.current) setGridLoading(false);
     }
-  }, [selectedModel, selectedParam, fhour, bbox, region, parameterCategories]);
+  }, [selectedModel, selectedParam, fhour, bbox, region, parameterCategories, frameCacheGet, frameCacheSet]);
+
+  const prefetchForecast = useCallback(async (hour) => {
+    const h = hour ?? fhour;
+    const key = frameCacheKey(selectedModel, selectedParam, h, region);
+    if (frameCacheRef.current.has(key) || prefetchInFlightRef.current.has(key)) {
+      return;
+    }
+
+    prefetchInFlightRef.current.add(key);
+    try {
+      const data = await fetchForecast({
+        model: selectedModel,
+        parameter: selectedParam,
+        fhour: h,
+        bbox,
+      });
+
+      const cmap = resolveCmap(selectedParam, parameterCategories);
+      let csStops = colorScaleCacheRef.current[cmap];
+      if (!csStops) {
+        try {
+          const cs = await fetchColorScale(cmap);
+          csStops = cs.stops || null;
+          colorScaleCacheRef.current[cmap] = csStops;
+        } catch { csStops = null; }
+      }
+      if (csStops) data.color_scale = csStops;
+      frameCacheSet(key, data);
+    } catch {
+      /* Prefetch is best-effort and should never surface UI errors. */
+    } finally {
+      prefetchInFlightRef.current.delete(key);
+    }
+  }, [selectedModel, selectedParam, fhour, bbox, region, parameterCategories, frameCacheSet]);
 
   /* Load forecast when key state changes */
   useEffect(() => {
     if (!initLoading && !initError) loadForecast();
     return () => { gridRequestIdRef.current += 1; };
   }, [loadForecast, initLoading, initError]);
+
+  useEffect(() => {
+    if (!playing || initLoading || initError) return;
+    const nextHour = fhour + fhourStep > maxFhour ? 0 : fhour + fhourStep;
+    void prefetchForecast(nextHour);
+  }, [playing, fhour, fhourStep, maxFhour, prefetchForecast, initLoading, initError]);
 
   /* ── Comparison model fetch ────────────────────────────── */
   useEffect(() => {
@@ -694,51 +877,76 @@ export default function App() {
     ? validZuluLabel(fhour, compareGridData?.valid_time, compareGridData?.run)
     : validTimeLabel;
 
-  /* ── Difference mode: compute delta from previous frame ── */
-  const displayGridData = useMemo(() => {
-    if (!diffMode || !gridData) return gridData;
+  /* ── Difference mode: compute delta from previous frame (worker-first) ── */
+  const [displayGridData, setDisplayGridData] = useState(null);
+  useEffect(() => {
+    if (!diffMode || !gridData) {
+      setDisplayGridData(gridData);
+      return;
+    }
+
     const prevHour = Math.max(0, fhour - fhourStep);
-    if (prevHour === fhour) return gridData;
+    if (prevHour === fhour) {
+      setDisplayGridData(gridData);
+      return;
+    }
+
     const prevKey = frameCacheKey(selectedModel, selectedParam, prevHour, region);
-    const prevData = frameCacheRef.current.get(prevKey);
-    if (!prevData || !prevData.values) return gridData;
+    const prevData = frameCacheGet(prevKey);
+    if (!prevData || !Array.isArray(prevData.values)) {
+      setDisplayGridData(gridData);
+      return;
+    }
 
     const vals = gridData.values;
     const prevVals = prevData.values;
-    const is2D = Array.isArray(vals[0]);
+    const requestId = ++diffRequestIdRef.current;
 
-    let diffValues;
-    if (is2D) {
-      diffValues = vals.map((row, i) =>
-        row.map((v, j) => {
-          const pv = prevVals[i]?.[j];
-          if (v == null || pv == null || isNaN(v) || isNaN(pv)) return null;
-          return v - pv;
-        })
-      );
-    } else {
-      diffValues = vals.map((v, i) => {
-        const pv = prevVals[i];
-        if (v == null || pv == null || isNaN(v) || isNaN(pv)) return null;
-        return v - pv;
-      });
+    const commitSyncFallback = () => {
+      if (requestId !== diffRequestIdRef.current) return;
+      const diffValues = computeDiffValuesSync(vals, prevVals);
+      if (!diffValues) {
+        setDisplayGridData(gridData);
+        return;
+      }
+      setDisplayGridData({ ...gridData, values: diffValues, color_scale: DIFF_SCALE });
+    };
+
+    const worker = diffWorkerRef.current;
+    if (!worker) {
+      commitSyncFallback();
+      return;
     }
 
-    /* Use a diverging color scale for differences */
-    const DIFF_SCALE = [
-      [-20, 0, 0, 200, 255],
-      [-10, 50, 100, 255, 220],
-      [-5, 100, 180, 255, 180],
-      [-1, 180, 220, 255, 120],
-      [0, 255, 255, 255, 40],
-      [1, 255, 220, 180, 120],
-      [5, 255, 180, 100, 180],
-      [10, 255, 100, 50, 220],
-      [20, 200, 0, 0, 255],
-    ];
+    const onMessage = (event) => {
+      const payload = event.data || {};
+      if (payload.id !== requestId) return;
+      worker.removeEventListener("message", onMessage);
+      worker.removeEventListener("error", onError);
+      if (!Array.isArray(payload.diffValues)) {
+        commitSyncFallback();
+        return;
+      }
+      setDisplayGridData({ ...gridData, values: payload.diffValues, color_scale: DIFF_SCALE });
+    };
 
-    return { ...gridData, values: diffValues, color_scale: DIFF_SCALE };
-  }, [diffMode, gridData, fhour, fhourStep, selectedModel, selectedParam, region]);
+    const onError = () => {
+      worker.removeEventListener("message", onMessage);
+      worker.removeEventListener("error", onError);
+      commitSyncFallback();
+    };
+
+    worker.addEventListener("message", onMessage);
+    worker.addEventListener("error", onError);
+    worker.postMessage({ id: requestId, values: vals, prevValues: prevVals });
+
+    return () => {
+      worker.removeEventListener("message", onMessage);
+      worker.removeEventListener("error", onError);
+    };
+  }, [diffMode, gridData, fhour, fhourStep, selectedModel, selectedParam, region, frameCacheGet]);
+
+  const mapGridData = diffMode ? (displayGridData || gridData) : gridData;
 
   if (initLoading) {
     return (
@@ -785,6 +993,10 @@ export default function App() {
           setOverlayOpacity={setOverlayOpacity}
           showContours={showContours}
           setShowContours={setShowContours}
+          showWindParticles={showWindParticles}
+          setShowWindParticles={setShowWindParticles}
+          useWebGL={useWebGL}
+          setUseWebGL={setUseWebGL}
           diffMode={diffMode}
           setDiffMode={setDiffMode}
           onExport={handleExport}
@@ -804,7 +1016,7 @@ export default function App() {
         />
         <div className={`map-container${compareMode ? " map-compare" : ""}`}>
           <ForecastMap
-            gridData={displayGridData}
+            gridData={mapGridData}
             loading={gridLoading}
             error={gridError}
             bbox={bbox}
@@ -815,6 +1027,8 @@ export default function App() {
             onMapReady={(m) => { mapInstanceRef.current = m; }}
             onMapClick={handleMapClick}
             showContours={showContours}
+            showWindParticles={showWindParticles}
+            useWebGL={useWebGL}
           />
           {compareMode && (
             <ForecastMap
@@ -827,6 +1041,8 @@ export default function App() {
               validTime={compareValidTimeLabel}
               model={compareModel}
               showContours={showContours}
+              showWindParticles={showWindParticles}
+              useWebGL={useWebGL}
             />
           )}
           <ColorBar parameter={selectedParam} parameterCategories={parameterCategories} />
@@ -853,6 +1069,7 @@ export default function App() {
             <CrossSection
               data={crossData}
               loading={crossLoading}
+              progress={crossProgress}
               model={selectedModel}
               onClose={() => { setActivePanel(null); setCrossDrawMode(false); crossLineRef.current = []; }}
               onStartDraw={() => { setCrossDrawMode(true); crossLineRef.current = []; }}

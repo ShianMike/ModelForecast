@@ -137,13 +137,47 @@ export async function fetchSoundingPlot({ model, lat, lon, fhour, theme, colorbl
   return data;
 }
 
-/* Cross-section along a line */
-export async function fetchCrossSection({ model, variable, fhour, lat1, lon1, lat2, lon2 }) {
+/* Cross-section along a line (SSE streaming with progress, fallback to regular) */
+export async function fetchCrossSection({ model, variable, fhour, lat1, lon1, lat2, lon2, onProgress }) {
   const params = new URLSearchParams({
     model, variable, fhour: String(fhour || 0),
     lat1: String(lat1), lon1: String(lon1),
     lat2: String(lat2), lon2: String(lon2),
   });
+
+  /* Try SSE streaming endpoint first for real-time progress */
+  if (typeof EventSource !== "undefined" && onProgress) {
+    try {
+      return await new Promise((resolve, reject) => {
+        const url = `${API_BASE}/api/cross-section/stream?${params}`;
+        const es = new EventSource(url);
+        let settled = false;
+        const timeout = setTimeout(() => {
+          if (!settled) { settled = true; es.close(); reject(new Error("SSE timeout")); }
+        }, 60000);
+
+        es.addEventListener("progress", (e) => {
+          try { onProgress(JSON.parse(e.data)); } catch { /* ignore */ }
+        });
+        es.addEventListener("result", (e) => {
+          if (!settled) { settled = true; clearTimeout(timeout); es.close(); resolve(JSON.parse(e.data)); }
+        });
+        es.addEventListener("error", (e) => {
+          if (!settled) {
+            settled = true; clearTimeout(timeout); es.close();
+            try { reject(new Error(JSON.parse(e.data).error)); } catch { reject(new Error("SSE error")); }
+          }
+        });
+        es.onerror = () => {
+          if (!settled) { settled = true; clearTimeout(timeout); es.close(); reject(new Error("SSE connection error")); }
+        };
+      });
+    } catch {
+      /* Fall through to regular fetch */
+    }
+  }
+
+  /* Fallback: regular JSON endpoint */
   const res = await fetchWithTimeout(`${API_BASE}/api/cross-section?${params}`, {}, 30000);
   const data = await res.json();
   if (!res.ok) throw new Error(data.error || "Cross-section fetch failed");

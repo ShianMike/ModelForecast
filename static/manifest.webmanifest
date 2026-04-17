@@ -1,0 +1,1 @@
+{"name":"Model Forecast","short_name":"Forecast","description":"Interactive weather model viewer with forecast maps, soundings, and severe weather composites.","start_url":"/","display":"standalone","background_color":"#06121e","theme_color":"#06121e","lang":"en","scope":"/","icons":[{"src":"/favicon.svg","sizes":"any","type":"image/svg+xml"}]}

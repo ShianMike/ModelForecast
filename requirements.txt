@@ -6,3 +6,5 @@ requests>=2.31
 numpy>=1.26
 Pillow>=10.0
 google-cloud-storage>=2.18
+numba>=0.60
+imagecodecs>=2024.1

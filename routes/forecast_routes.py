@@ -3,21 +3,24 @@ Forecast API routes — gridded data and point forecasts.
 Core forecast endpoints use NOAA GRIB sources (NOMADS first, AWS mirror second)
 for GFS, NAM, RAP, and HRRR. Ensemble data remains on Open-Meteo.
 """
+import json
 import math
 import logging
 import re
 import time
 import threading
+from collections import OrderedDict
 from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import numpy as np
 import requests as http_requests
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, Response, jsonify, request
 
 from forecast import nomads
 from forecast import aws_grib
 from forecast import open_meteo
+from forecast import ecmwf
 from forecast import run_cache
 from forecast.open_meteo import RateLimitError
 from forecast.parameters import get_color_scale
@@ -36,13 +39,15 @@ bp = Blueprint("forecast", __name__)
 
 
 # ─── Point endpoint cache (sounding) ───────────────────────
-_POINT_CACHE = {}
+_POINT_CACHE = OrderedDict()
 _POINT_CACHE_LOCK = threading.Lock()
 _POINT_CACHE_TTL = 900  # seconds
+_POINT_CACHE_MAX_SIZE = 500
 
-_METEOGRAM_CACHE = {}
+_METEOGRAM_CACHE = OrderedDict()
 _METEOGRAM_CACHE_LOCK = threading.Lock()
 _METEOGRAM_CACHE_TTL = 1800  # seconds
+_METEOGRAM_CACHE_MAX_SIZE = 500
 
 _NOMADS_POINT_WORKERS = 8
 _METEOGRAM_HOUR_CAP = 120
@@ -52,6 +57,7 @@ _POINT_MODEL_CONFIG = {
     "hrrr": {"max_hour": 48, "step": 1},
     "nam": {"max_hour": 84, "step": 3},
     "rap": {"max_hour": 51, "step": 1},
+    "ecmwf_ifs": {"max_hour": 240, "step": 3},
 }
 
 _MODEL_MAX_HOURS = {model: cfg["max_hour"] for model, cfg in _POINT_MODEL_CONFIG.items()}
@@ -61,6 +67,7 @@ _POINT_BBOX_HALF_SPAN = {
     "nam": 0.35,
     "rap": 0.25,
     "hrrr": 0.20,
+    "ecmwf_ifs": 0.40,
 }
 
 _GRIB_SUPPORTED_MODELS = frozenset(_POINT_MODEL_CONFIG.keys())
@@ -72,6 +79,7 @@ _SOUNDING_STEP = {
     "hrrr": 1,
     "nam": 3,
     "rap": 3,
+    "ecmwf_ifs": 3,
 }
 
 
@@ -217,43 +225,59 @@ def _aws_sounding_patterns(level):
 
 
 def _point_cache_get(key):
-    now = time.time()
-    with _POINT_CACHE_LOCK:
-        entry = _POINT_CACHE.get(key)
-        if entry and (now - entry["ts"]) < _POINT_CACHE_TTL:
-            return entry["data"]
-        if entry:
-            del _POINT_CACHE[key]
-    return None
+    return _ttl_lru_cache_get(_POINT_CACHE, _POINT_CACHE_LOCK, key, _POINT_CACHE_TTL)
 
 
 def _point_cache_set(key, data):
-    with _POINT_CACHE_LOCK:
-        if len(_POINT_CACHE) > 500:
-            oldest = sorted(_POINT_CACHE, key=lambda k: _POINT_CACHE[k]["ts"])[:100]
-            for k in oldest:
-                del _POINT_CACHE[k]
-        _POINT_CACHE[key] = {"data": data, "ts": time.time()}
+    _ttl_lru_cache_set(
+        _POINT_CACHE,
+        _POINT_CACHE_LOCK,
+        key,
+        data,
+        _POINT_CACHE_MAX_SIZE,
+    )
 
 
 def _meteogram_cache_get(key):
-    now = time.time()
-    with _METEOGRAM_CACHE_LOCK:
-        entry = _METEOGRAM_CACHE.get(key)
-        if entry and (now - entry["ts"]) < _METEOGRAM_CACHE_TTL:
-            return entry["data"]
-        if entry:
-            del _METEOGRAM_CACHE[key]
-    return None
+    return _ttl_lru_cache_get(
+        _METEOGRAM_CACHE,
+        _METEOGRAM_CACHE_LOCK,
+        key,
+        _METEOGRAM_CACHE_TTL,
+    )
 
 
 def _meteogram_cache_set(key, data):
-    with _METEOGRAM_CACHE_LOCK:
-        if len(_METEOGRAM_CACHE) > 500:
-            oldest = sorted(_METEOGRAM_CACHE, key=lambda k: _METEOGRAM_CACHE[k]["ts"])[:100]
-            for k in oldest:
-                del _METEOGRAM_CACHE[k]
-        _METEOGRAM_CACHE[key] = {"data": data, "ts": time.time()}
+    _ttl_lru_cache_set(
+        _METEOGRAM_CACHE,
+        _METEOGRAM_CACHE_LOCK,
+        key,
+        data,
+        _METEOGRAM_CACHE_MAX_SIZE,
+    )
+
+
+def _ttl_lru_cache_get(cache, lock, key, ttl_seconds):
+    """Return cache entry when fresh and mark as most-recently-used."""
+    now = time.time()
+    with lock:
+        entry = cache.get(key)
+        if not entry:
+            return None
+        if (now - entry["ts"]) >= ttl_seconds:
+            del cache[key]
+            return None
+        cache.move_to_end(key)
+        return entry["data"]
+
+
+def _ttl_lru_cache_set(cache, lock, key, data, max_size):
+    """Store cache entry and evict least-recently-used items above max_size."""
+    with lock:
+        cache[key] = {"data": data, "ts": time.time()}
+        cache.move_to_end(key)
+        while len(cache) > max_size:
+            cache.popitem(last=False)
 
 
 def _normalize_lon(lon):
@@ -283,6 +307,19 @@ def _parse_fhour_arg(model, arg_name="fhour", default=0):
         maximum=_MODEL_MAX_HOURS.get(model.lower()),
         clamp_max=True,
     )
+
+
+def _snap_fhour_to_step(model, fhour):
+    """Snap fhour down to the nearest valid forecast step for the model.
+
+    Models like ECMWF IFS (step=6) and ICON (step=3) only have data at
+    specific intervals.  Requesting an in-between hour (e.g. 13) would 404
+    on the upstream server, so we round down to the nearest valid step.
+    """
+    step = _POINT_MODEL_CONFIG.get(model.lower(), {}).get("step", 1)
+    if step <= 1:
+        return fhour
+    return (fhour // step) * step
 
 
 def _require_grib_supported_model(model):
@@ -1256,6 +1293,8 @@ def _get_supported(model):
         return nomads.get_supported_variables(model)
     if aws_grib.is_aws_model(model):
         return aws_grib.get_supported_variables(model)
+    if ecmwf.is_ecmwf_model(model):
+        return ecmwf.get_supported_variables(model)
     return set()
 
 
@@ -1289,20 +1328,48 @@ COMPOSITE_PARAMS = {
 
 
 def _fetch_grid(model, variable, fhour, bbox):
-    """Fetch a single gridded field: NOMADS → AWS."""
+    """Fetch a single gridded field with robust multi-source fallback.
+
+    Priority: NOMADS → AWS → ECMWF → ICON.
+    Each source is tried only if the model is supported there.
+    """
+    errors = {}
+
     if nomads.is_nomads_model(model):
         try:
             return nomads.fetch_grid_forecast(model, variable, fhour, bbox)
         except Exception as exc:
-            log.info("NOMADS failed for %s/%s at fhour %s: %s", model, variable, fhour, exc)
+            errors["NOMADS"] = exc
+            log.warning(
+                "NOMADS failed for %s/%s F%03d (%s: %s) — trying next source",
+                model, variable, fhour, type(exc).__name__, exc,
+            )
 
     if aws_grib.is_aws_model(model):
         try:
             return aws_grib.fetch_grid_forecast(model, variable, fhour, bbox)
         except Exception as exc:
-            log.info("AWS failed for %s/%s at fhour %s: %s", model, variable, fhour, exc)
+            errors["AWS"] = exc
+            log.warning(
+                "AWS failed for %s/%s F%03d (%s: %s)",
+                model, variable, fhour, type(exc).__name__, exc,
+            )
 
-    raise RuntimeError(f"No GRIB source available for {model}/{variable} at F{fhour:03d}")
+    if ecmwf.is_ecmwf_model(model):
+        try:
+            return ecmwf.fetch_grid_forecast(model, variable, fhour, bbox)
+        except Exception as exc:
+            errors["ECMWF"] = exc
+            log.warning(
+                "ECMWF failed for %s/%s F%03d (%s: %s)",
+                model, variable, fhour, type(exc).__name__, exc,
+            )
+
+    # All sources exhausted
+    detail = " ".join(f"{src}: {exc}" for src, exc in errors.items())
+    raise RuntimeError(
+        f"No GRIB source available for {model}/{variable} at F{fhour:03d}. {detail}"
+    )
 
 
 def _compute_bulk_shear(grids, fhour):
@@ -1536,6 +1603,7 @@ def get_forecast():
     try:
         model = _require_grib_supported_model(model)
         fhour = _parse_fhour_arg(model)
+        fhour = _snap_fhour_to_step(model, fhour)
         bbox = parse_bbox(request.args)
     except QueryValidationError as exc:
         return json_error(str(exc), exc.status_code)
@@ -1548,6 +1616,14 @@ def get_forecast():
     # Handle composite/derived parameters
     if variable in COMPOSITE_PARAMS:
         comp = COMPOSITE_PARAMS[variable]
+        # Check that all component variables are supported by this model
+        missing = [v for v in comp["components"]
+                   if v not in supported and v != "temperature_500hPa_raw"]
+        if missing:
+            return jsonify({
+                "error": f"Variable '{variable}' is not available for model '{model}' "
+                         f"(missing: {', '.join(missing)})"
+            }), 400
         try:
             grids = {}
             for comp_var in comp["components"]:
@@ -1819,6 +1895,122 @@ def get_cross_section():
             lon2,
         )
         return json_error("Failed to fetch cross-section data from upstream providers.", 502)
+
+
+@bp.route("/api/cross-section/stream", methods=["GET"])
+def get_cross_section_stream():
+    """Stream cross-section progress via Server-Sent Events.
+
+    Emits events:
+      - ``progress`` with ``{completed, total}`` as each column finishes.
+      - ``result``   with the full cross-section JSON (same shape as the
+        non-streaming endpoint).
+      - ``error``    on failure.
+
+    The client can render a progress bar and receive the final payload in a
+    single connection without polling.
+    """
+    try:
+        model = request.args.get("model", "gfs")
+        model = _require_grib_supported_model(model)
+        variable = request.args.get("variable", "temperature")
+        fhour = _parse_fhour_arg(model)
+        lat1, lon1 = parse_lat_lon(request.args, "lat1", "lon1")
+        lat2, lon2 = parse_lat_lon(request.args, "lat2", "lon2")
+        _resolve_cross_section_variable(variable)
+    except QueryValidationError as exc:
+        return json_error(str(exc), exc.status_code)
+
+    def generate():
+        """Yield SSE frames as each sounding column completes."""
+        try:
+            variable_config = _resolve_cross_section_variable(variable)
+            sampled_fhour = _snap_sounding_fhour(model, fhour)
+            levels = [1000, 925, 850, 700, 500, 300, 250, 200]
+            points = []
+            for idx in range(20):
+                frac = idx / 19.0
+                lat = lat1 + (lat2 - lat1) * frac
+                lon = lon1 + (lon2 - lon1) * frac
+                points.append((round(lat, 3), round(lon, 3)))
+
+            total = len(points)
+            completed = [0]
+            payloads = [None] * total
+
+            def fetch_point_column(idx, lat, lon):
+                cache_key = f"snd:{model}:{sampled_fhour}:{round(lat, 3)}:{round(lon, 3)}"
+                sounding = _point_cache_get(cache_key)
+                if sounding is None:
+                    sounding = _build_grib_sounding(model, lat, lon, sampled_fhour)
+                    _point_cache_set(cache_key, sounding)
+                profile_by_level = {
+                    int(row["pressure"]): row
+                    for row in sounding.get("profile", [])
+                    if row.get("pressure") is not None
+                }
+                column = []
+                for level in levels:
+                    level_row = profile_by_level.get(level)
+                    value = (
+                        _extract_cross_section_profile_value(level_row, variable_config["base"])
+                        if level_row
+                        else None
+                    )
+                    column.append(_f_or_none(value, 1))
+                return column, sounding.get("valid_time"), sounding.get("source"), sounding.get("source_model")
+
+            max_workers = min(4, total)
+            with ThreadPoolExecutor(max_workers=max_workers) as pool:
+                futures = {
+                    pool.submit(fetch_point_column, idx, lat, lon): idx
+                    for idx, (lat, lon) in enumerate(points)
+                }
+                for future in as_completed(futures):
+                    idx = futures[future]
+                    try:
+                        payloads[idx] = future.result()
+                    except Exception as exc:
+                        log.debug("Cross-section point %s failed: %s", idx, exc)
+                        payloads[idx] = ([None] * len(levels), None, None, None)
+                    completed[0] += 1
+                    yield f"event: progress\ndata: {json.dumps({'completed': completed[0], 'total': total})}\n\n"
+
+            # Compute distances
+            distances = [0]
+            for i in range(1, len(points)):
+                dlat = points[i][0] - points[i - 1][0]
+                dlon = points[i][1] - points[i - 1][1]
+                km = math.sqrt(dlat ** 2 + dlon ** 2) * 111.0
+                distances.append(round(distances[-1] + km, 1))
+
+            valid_time = next((p[1] for p in payloads if p and p[1]), None)
+            source = next((p[2] for p in payloads if p and p[2]), None)
+            source_model = next((p[3] for p in payloads if p and p[3]), model)
+
+            result = _nan_safe({
+                "model": model,
+                "source_model": source_model,
+                "source": source,
+                "variable": variable_config["base"],
+                "requested_variable": variable,
+                "requested_forecast_hour": fhour,
+                "forecast_hour": sampled_fhour,
+                "label": variable_config["label"],
+                "unit": variable_config["unit"],
+                "valid_time": valid_time,
+                "points": [{"lat": lat, "lon": lon} for lat, lon in points],
+                "levels": levels,
+                "distances": distances,
+                "values": [p[0] for p in payloads],
+            })
+            yield f"event: result\ndata: {json.dumps(result)}\n\n"
+        except Exception as exc:
+            log.exception("SSE cross-section failed")
+            yield f"event: error\ndata: {json.dumps({'error': str(exc)})}\n\n"
+
+    return Response(generate(), mimetype="text/event-stream",
+                    headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
 @bp.route("/api/ensemble", methods=["GET"])

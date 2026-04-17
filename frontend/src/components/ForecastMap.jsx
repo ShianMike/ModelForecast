@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import L from "leaflet";
 import CanvasOverlay from "./CanvasOverlay";
+import WindParticleLayer from "./WindParticleLayer";
+import DeckGLOverlay from "./DeckGLOverlay";
 import "./ForecastMap.css";
 
 const DARK_TILES = "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png";
@@ -28,7 +30,7 @@ function findNearestIndex(sortedValues, target) {
     : prev;
 }
 
-export default function ForecastMap({ gridData, loading, error, bbox, parameter, overlayOpacity, onMapReady, onMapClick, showContours }) {
+export default function ForecastMap({ gridData, loading, error, bbox, parameter, overlayOpacity, onMapReady, onMapClick, showContours, showWindParticles, useWebGL }) {
   const mapContainerRef = useRef(null);
   const mapRef = useRef(null);
   const onMapReadyRef = useRef(onMapReady);
@@ -175,7 +177,7 @@ export default function ForecastMap({ gridData, loading, error, bbox, parameter,
   return (
     <div className="forecast-map">
       <div ref={mapContainerRef} className="forecast-map-inner" />
-      {mapRef.current && gridData && (
+      {mapRef.current && gridData && !useWebGL && (
         <CanvasOverlay
           map={mapRef.current}
           gridData={gridData}
@@ -183,6 +185,22 @@ export default function ForecastMap({ gridData, loading, error, bbox, parameter,
           opacity={overlayOpacity}
           showContours={showContours}
           ref={canvasRef}
+        />
+      )}
+      {mapRef.current && gridData && useWebGL && (
+        <DeckGLOverlay
+          map={mapRef.current}
+          gridData={gridData}
+          colorScale={gridData.color_scale}
+          opacity={overlayOpacity}
+          visible={true}
+        />
+      )}
+      {mapRef.current && gridData?.u_component && gridData?.v_component && (
+        <WindParticleLayer
+          map={mapRef.current}
+          gridData={gridData}
+          visible={showWindParticles !== false}
         />
       )}
       {loading && (
