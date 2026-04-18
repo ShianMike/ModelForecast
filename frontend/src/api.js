@@ -3,9 +3,21 @@ const API_BASE = import.meta.env.VITE_API_URL || "";
 function fetchWithTimeout(url, options = {}, timeoutMs = 15000) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+  /* If the caller supplied an external signal, forward its abort to our controller */
+  const externalSignal = options.signal;
+  if (externalSignal) {
+    if (externalSignal.aborted) { clearTimeout(timer); controller.abort(); }
+    else externalSignal.addEventListener("abort", () => controller.abort(), { once: true });
+  }
+
   return fetch(url, { ...options, signal: controller.signal })
     .catch((err) => {
-      if (err.name === "AbortError") throw new Error("Request timed out");
+      if (err.name === "AbortError") {
+        /* Distinguish caller-initiated abort from timeout */
+        if (externalSignal?.aborted) { const e = new Error("Request aborted"); e.aborted = true; throw e; }
+        throw new Error("Request timed out");
+      }
       throw err;
     })
     .finally(() => clearTimeout(timer));
@@ -60,7 +72,7 @@ export async function fetchParameters(model) {
 }
 
 /* Gridded forecast data */
-export async function fetchForecast({ model, parameter, fhour, bbox }) {
+export async function fetchForecast({ model, parameter, fhour, bbox, signal }) {
   const params = new URLSearchParams({
     model,
     variable: parameter,
@@ -75,7 +87,7 @@ export async function fetchForecast({ model, parameter, fhour, bbox }) {
   return withRetry(async () => {
     const res = await fetchWithTimeout(
       `${API_BASE}/api/forecast?${params}`,
-      {},
+      { signal },
       30000
     );
     const data = await readResponsePayload(res);
@@ -107,9 +119,9 @@ export async function fetchColorScale(cmapName) {
 }
 
 /* Point time-series for meteogram */
-export async function fetchMeteogram({ model, lat, lon }) {
+export async function fetchMeteogram({ model, lat, lon, signal }) {
   const params = new URLSearchParams({ model, lat: String(lat), lon: String(lon) });
-  const res = await fetchWithTimeout(`${API_BASE}/api/meteogram?${params}`, {}, 20000);
+  const res = await fetchWithTimeout(`${API_BASE}/api/meteogram?${params}`, { signal }, 20000);
   const data = await res.json();
   if (!res.ok) throw new Error(data.error || "Meteogram fetch failed");
   return data;
@@ -125,13 +137,13 @@ export async function fetchSounding({ model, lat, lon, fhour }) {
 }
 
 /* Full sounding plot from Sounding Analysis project */
-export async function fetchSoundingPlot({ model, lat, lon, fhour, theme, colorblind, run }) {
+export async function fetchSoundingPlot({ model, lat, lon, fhour, theme, colorblind, run, signal }) {
   const params = new URLSearchParams({
     model, lat: String(lat), lon: String(lon), fhour: String(fhour || 0),
     theme: theme || "dark", colorblind: String(!!colorblind),
   });
   if (run) params.set("run", String(run));
-  const res = await fetchWithTimeout(`${API_BASE}/api/sounding-plot?${params}`, {}, 65000);
+  const res = await fetchWithTimeout(`${API_BASE}/api/sounding-plot?${params}`, { signal }, 65000);
   const data = await res.json();
   if (!res.ok) throw new Error(data.error || "Sounding plot fetch failed");
   return data;
@@ -185,9 +197,9 @@ export async function fetchCrossSection({ model, variable, fhour, lat1, lon1, la
 }
 
 /* Ensemble plume data at a point */
-export async function fetchEnsemble({ variable, lat, lon }) {
+export async function fetchEnsemble({ variable, lat, lon, signal }) {
   const params = new URLSearchParams({ variable, lat: String(lat), lon: String(lon) });
-  const res = await fetchWithTimeout(`${API_BASE}/api/ensemble?${params}`, {}, 25000);
+  const res = await fetchWithTimeout(`${API_BASE}/api/ensemble?${params}`, { signal }, 25000);
   const data = await res.json();
   if (!res.ok) throw new Error(data.error || "Ensemble fetch failed");
   return data;

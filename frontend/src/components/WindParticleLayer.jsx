@@ -70,78 +70,102 @@ function buildVelocityData(gridData) {
 
 export default function WindParticleLayer({ map, gridData, visible }) {
   const layerRef = useRef(null);
+  const rafRef = useRef(null);
 
   useEffect(() => {
-    if (!map || !visible) {
+    /* Cleanup helper — removes layer + cancels any pending RAF */
+    const cleanup = () => {
+      if (rafRef.current) {
+        cancelAnimationFrame(rafRef.current);
+        rafRef.current = null;
+      }
       if (layerRef.current) {
-        map?.removeLayer(layerRef.current);
+        try { map?.removeLayer(layerRef.current); } catch { /* already removed */ }
         layerRef.current = null;
       }
+    };
+
+    if (!map || !visible) {
+      cleanup();
       return;
     }
 
     const velocityData = buildVelocityData(gridData);
     if (!velocityData) {
-      if (layerRef.current) {
-        map.removeLayer(layerRef.current);
-        layerRef.current = null;
-      }
+      cleanup();
       return;
     }
 
     /* Remove previous layer before adding a new one */
-    if (layerRef.current) {
-      map.removeLayer(layerRef.current);
-      layerRef.current = null;
-    }
+    cleanup();
 
-    /* Defer layer creation until the map container is fully initialised.
-       leaflet-velocity calls _map.getSize() and containerPointToLayerPoint()
-       synchronously inside onAdd, which blows up if the container element
-       hasn't been laid out yet (returns null). */
-    if (!map.getContainer() || !map.getSize()) return;
+    /* Defer layer creation to the next animation frame so the Leaflet map
+       container is fully laid out and React's commit phase has finished.
+       leaflet-velocity internally uses setTimeout in onAdd — if we add the
+       layer synchronously during a React effect, the cleanup for a *previous*
+       effect can fire between addTo and that setTimeout, nullifying _map. */
+    let cancelled = false;
+    rafRef.current = requestAnimationFrame(() => {
+      rafRef.current = null;
+      if (cancelled) return;
+      if (!map.getContainer() || !map.getSize()) return;
 
-    const layer = L.velocityLayer({
-      displayValues: false,
-      data: velocityData,
-      maxVelocity: 40,
-      velocityScale: 0.008,
-      particleAge: 60,
-      lineWidth: 1.2,
-      particleMultiplier: 1 / 200,
-      colorScale: [
-        "rgba(36,104,180,0.7)",
-        "rgba(60,157,194,0.7)",
-        "rgba(128,205,193,0.7)",
-        "rgba(151,218,168,0.7)",
-        "rgba(198,231,181,0.7)",
-        "rgba(238,247,217,0.7)",
-        "rgba(255,238,159,0.7)",
-        "rgba(252,217,125,0.7)",
-        "rgba(255,182,100,0.7)",
-        "rgba(252,150,75,0.7)",
-        "rgba(250,112,52,0.7)",
-        "rgba(245,64,32,0.7)",
-        "rgba(237,45,28,0.7)",
-        "rgba(220,24,32,0.7)",
-        "rgba(180,0,35,0.7)",
-      ],
+      const layer = L.velocityLayer({
+        displayValues: false,
+        data: velocityData,
+        maxVelocity: 40,
+        velocityScale: 0.008,
+        particleAge: 60,
+        lineWidth: 1.2,
+        particleMultiplier: 1 / 500,
+        colorScale: [
+          "rgba(36,104,180,0.7)",
+          "rgba(60,157,194,0.7)",
+          "rgba(128,205,193,0.7)",
+          "rgba(151,218,168,0.7)",
+          "rgba(198,231,181,0.7)",
+          "rgba(238,247,217,0.7)",
+          "rgba(255,238,159,0.7)",
+          "rgba(252,217,125,0.7)",
+          "rgba(255,182,100,0.7)",
+          "rgba(252,150,75,0.7)",
+          "rgba(250,112,52,0.7)",
+          "rgba(245,64,32,0.7)",
+          "rgba(237,45,28,0.7)",
+          "rgba(220,24,32,0.7)",
+          "rgba(180,0,35,0.7)",
+        ],
+      });
+
+      /* Monkey-patch the two methods that crash when _map is null.
+         leaflet-velocity fires these from setTimeout / rAF after onAdd,
+         and React cleanup can null _map in between. */
+      const origMove = layer._onLayerDidMove;
+      layer._onLayerDidMove = function () {
+        if (!this._map) return;
+        return origMove.apply(this, arguments);
+      };
+      const origDraw = layer.drawLayer;
+      layer.drawLayer = function () {
+        if (!this._map) return;
+        return origDraw.apply(this, arguments);
+      };
+
+      try {
+        layer.addTo(map);
+      } catch {
+        return;
+      }
+      if (cancelled) {
+        try { map.removeLayer(layer); } catch { /* noop */ }
+        return;
+      }
+      layerRef.current = layer;
     });
 
-    try {
-      layer.addTo(map);
-    } catch {
-      /* leaflet-velocity can still race if the canvas isn't painted yet;
-         silently bail — the next effect cycle will retry. */
-      return;
-    }
-    layerRef.current = layer;
-
     return () => {
-      if (layerRef.current) {
-        map.removeLayer(layerRef.current);
-        layerRef.current = null;
-      }
+      cancelled = true;
+      cleanup();
     };
   }, [map, gridData, visible]);
 

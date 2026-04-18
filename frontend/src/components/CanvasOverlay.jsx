@@ -60,8 +60,14 @@ function computeEdges(coords) {
  */
 const MS_TO_KT = 1.94384;
 
-function drawWindBarb(ctx, cx, cy, u, v, staffLen) {
-  const speedKt = Math.sqrt(u * u + v * v) * MS_TO_KT;
+/**
+ * Draw a single north-pointing wind barb for a given speed bucket onto an
+ * offscreen canvas context.  The barb is drawn pointing straight UP (north)
+ * so callers can simply rotate the sprite to the correct wind direction.
+ *
+ * cx, cy = center of the barb origin; staffLen = length of the staff line.
+ */
+function _drawBarbNorth(ctx, cx, cy, speedKt, staffLen) {
   if (speedKt < 2.5) {
     /* Calm — draw a circle */
     ctx.beginPath();
@@ -70,14 +76,9 @@ function drawWindBarb(ctx, cx, cy, u, v, staffLen) {
     return;
   }
 
-  /* Direction wind is coming FROM (meteorological convention) */
-  const fromAngle = Math.atan2(-v, -u); /* screen coords: +x right, +y down in canvas */
-  const cosA = Math.cos(fromAngle);
-  const sinA = -Math.sin(fromAngle); /* negate because canvas Y is inverted */
-
-  /* Staff: dot at (cx,cy), extends toward "from" direction */
-  const tipX = cx + cosA * staffLen;
-  const tipY = cy + sinA * staffLen;
+  /* Staff points straight up (north) from (cx, cy) */
+  const tipX = cx;
+  const tipY = cy - staffLen;
 
   ctx.beginPath();
   ctx.moveTo(cx, cy);
@@ -85,67 +86,121 @@ function drawWindBarb(ctx, cx, cy, u, v, staffLen) {
   ctx.stroke();
 
   /* Decompose speed into pennants, full barbs, half barbs */
-  let remaining = Math.round(speedKt / 5) * 5; /* round to nearest 5 */
+  let remaining = Math.round(speedKt / 5) * 5;
   const pennants = Math.floor(remaining / 50);
   remaining -= pennants * 50;
   const fullBarbs = Math.floor(remaining / 10);
   remaining -= fullBarbs * 10;
   const halfBarbs = Math.floor(remaining / 5);
 
-  /* Perpendicular direction (left side of staff when facing "from") */
-  const perpX = -sinA;
-  const perpY = cosA;
-
   const barbLen = staffLen * 0.4;
   const barbSpacing = staffLen * 0.12;
-  let pos = 0; /* distance from tip along the staff */
+  let pos = 0; /* distance from tip downward along the staff */
 
-  /* Draw pennants (filled triangles) */
+  /* Pennants (filled triangles — barbs on the left of the staff) */
   for (let p = 0; p < pennants; p++) {
-    const baseX = tipX - cosA * pos;
-    const baseY = tipY - sinA * pos;
+    const baseY = tipY + pos;
     const nextPos = pos + barbSpacing * 1.5;
-    const nextX = tipX - cosA * nextPos;
-    const nextY = tipY - sinA * nextPos;
+    const nextY = tipY + nextPos;
 
     ctx.beginPath();
-    ctx.moveTo(baseX, baseY);
-    ctx.lineTo(baseX + perpX * barbLen, baseY + perpY * barbLen);
-    ctx.lineTo(nextX, nextY);
+    ctx.moveTo(tipX, baseY);
+    ctx.lineTo(tipX - barbLen, baseY);
+    ctx.lineTo(tipX, nextY);
     ctx.closePath();
     ctx.fill();
 
     pos = nextPos;
   }
 
-  /* Draw full barbs (long lines) */
+  /* Full barbs (long lines to the left) */
   for (let f = 0; f < fullBarbs; f++) {
-    if (pennants === 0 && f === 0 && fullBarbs === 0 && halfBarbs === 1) {
-      /* lone half barb goes slightly inward */
-    }
-    const bx = tipX - cosA * pos;
-    const by = tipY - sinA * pos;
+    const by = tipY + pos;
     ctx.beginPath();
-    ctx.moveTo(bx, by);
-    ctx.lineTo(bx + perpX * barbLen, by + perpY * barbLen);
+    ctx.moveTo(tipX, by);
+    ctx.lineTo(tipX - barbLen, by);
     ctx.stroke();
     pos += barbSpacing;
   }
 
-  /* Draw half barbs (short lines) */
+  /* Half barbs (short lines to the left) */
   for (let h = 0; h < halfBarbs; h++) {
-    /* If this is the only barb element, offset it slightly from tip */
     if (pennants === 0 && fullBarbs === 0 && h === 0) {
       pos += barbSpacing;
     }
-    const bx = tipX - cosA * pos;
-    const by = tipY - sinA * pos;
+    const by = tipY + pos;
     ctx.beginPath();
-    ctx.moveTo(bx, by);
-    ctx.lineTo(bx + perpX * (barbLen * 0.5), by + perpY * (barbLen * 0.5));
+    ctx.moveTo(tipX, by);
+    ctx.lineTo(tipX - barbLen * 0.5, by);
     ctx.stroke();
     pos += barbSpacing;
   }
+}
+
+/**
+ * Wind-barb sprite-sheet cache.
+ *
+ * Keyed by staffLen, each entry holds an object map from speed-bucket (0, 5,
+ * 10, … 100 kt) → offscreen <canvas> containing that barb drawn pointing
+ * north.  On the main canvas we simply translate → rotate → drawImage.
+ */
+const _barbSpriteCache = new Map();
+
+function _getBarbSprite(speedKt, staffLen, lineWidth) {
+  const bucket = speedKt < 2.5 ? 0 : Math.round(speedKt / 5) * 5;
+  const cacheKey = `${staffLen}:${lineWidth.toFixed(1)}`;
+
+  let sheet = _barbSpriteCache.get(cacheKey);
+  if (!sheet) {
+    sheet = new Map();
+    _barbSpriteCache.set(cacheKey, sheet);
+  }
+
+  let sprite = sheet.get(bucket);
+  if (sprite) return sprite;
+
+  /* Render a new sprite */
+  const size = Math.ceil(staffLen * 2);
+  const offscreen = document.createElement("canvas");
+  offscreen.width = size;
+  offscreen.height = size;
+  const ctx = offscreen.getContext("2d");
+  ctx.strokeStyle = "rgba(255,255,255,0.9)";
+  ctx.fillStyle = "rgba(255,255,255,0.9)";
+  ctx.lineWidth = lineWidth;
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+
+  _drawBarbNorth(ctx, size / 2, size / 2, bucket, staffLen);
+
+  sprite = { canvas: offscreen, size };
+  sheet.set(bucket, sprite);
+  return sprite;
+}
+
+/**
+ * Stamp a wind barb at (cx, cy) using the sprite-sheet cache.
+ * u, v in m/s — converted to knots internally.
+ */
+function drawWindBarb(ctx, cx, cy, u, v, staffLen, lineWidth) {
+  const speedKt = Math.sqrt(u * u + v * v) * MS_TO_KT;
+  const sprite = _getBarbSprite(speedKt, staffLen, lineWidth);
+
+  if (speedKt < 2.5) {
+    /* Calm — no rotation needed, just stamp */
+    ctx.drawImage(sprite.canvas, cx - sprite.size / 2, cy - sprite.size / 2);
+    return;
+  }
+
+  /* Direction wind is coming FROM (meteorological convention).
+     The sprite points north (up), so we rotate by the "from" angle
+     measured clockwise from north. */
+  const fromAngle = Math.atan2(-u, v); /* clockwise from north */
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.rotate(fromAngle);
+  ctx.drawImage(sprite.canvas, -sprite.size / 2, -sprite.size / 2);
+  ctx.restore();
 }
 
 /**
@@ -166,6 +221,13 @@ function drawContours(ctx, map, lats, lons, values, levels, labelSize) {
   /* Minimum pixel distance between any two labels (across all levels) */
   const MIN_LABEL_DIST = 120;
   const allLabelPts = [];
+
+  /* Pre-compute label text + width for each level (avoids measureText inside loops) */
+  const labelCache = new Map();
+  for (const level of levels) {
+    const text = Number.isInteger(level) ? String(level) : level.toFixed(1);
+    labelCache.set(level, { text, width: ctx.measureText(text).width });
+  }
 
   for (const level of levels) {
     ctx.strokeStyle = "rgba(255,255,255,0.6)";
@@ -226,8 +288,7 @@ function drawContours(ctx, map, lats, lons, values, levels, labelSize) {
 
     /* Place labels on the actual contour line at well-spaced midpoints */
     if (midpoints.length > 0) {
-      const label = Number.isInteger(level) ? String(level) : level.toFixed(1);
-      const tw = ctx.measureText(label).width;
+      const { text: label, width: tw } = labelCache.get(level);
       /* Pick midpoints spread across the contour */
       const targetCount = Math.min(12, Math.max(3, Math.round(midpoints.length / 60)));
       const step = Math.max(1, Math.floor(midpoints.length / targetCount));
@@ -369,7 +430,8 @@ const CanvasOverlay = forwardRef(function CanvasOverlay({ map, gridData, paramet
 
           ctx.strokeStyle = "rgba(255,255,255,0.9)";
           ctx.fillStyle = "rgba(255,255,255,0.9)";
-          ctx.lineWidth = Math.max(1.5, zoom * 0.35);
+          const barbLineWidth = Math.max(1.5, zoom * 0.35);
+          ctx.lineWidth = barbLineWidth;
           ctx.lineCap = "round";
           ctx.lineJoin = "round";
 
@@ -379,7 +441,7 @@ const CanvasOverlay = forwardRef(function CanvasOverlay({ map, gridData, paramet
               const v = vComp[i]?.[j];
               if (u == null || v == null || isNaN(u) || isNaN(v)) continue;
               const pt = map.latLngToContainerPoint([lats[i], lons[j]]);
-              drawWindBarb(ctx, pt.x, pt.y, u, v, staffLen);
+              drawWindBarb(ctx, pt.x, pt.y, u, v, staffLen, barbLineWidth);
             }
           }
         }

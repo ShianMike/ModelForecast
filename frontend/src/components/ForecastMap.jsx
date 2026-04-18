@@ -220,6 +220,7 @@ export default function ForecastMap({ gridData, loading, error, bbox, parameter,
           {cursorValue}
         </div>
       )}
+      <div className="map-watermark">modelforecast.app</div>
     </div>
   );
 }

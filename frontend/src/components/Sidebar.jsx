@@ -1,6 +1,7 @@
 import { useState } from "react";
-import { Map, Layers, Wind, CloudRain, Globe, Zap, Cloud, Compass, RefreshCw, Snowflake, Leaf, ExternalLink, Plus, Trash2 } from "lucide-react";
+import { Map, Layers, Wind, CloudRain, Globe, Zap, Cloud, Compass, RefreshCw, Snowflake, Leaf, ExternalLink, Plus, Trash2, PanelLeftClose, PanelLeftOpen } from "lucide-react";
 import ParameterPicker from "./ParameterPicker";
+import useDraggable from "../hooks/useDraggable";
 import "./Sidebar.css";
 
 const MODEL_ICONS = {
@@ -20,15 +21,24 @@ export default function Sidebar({
   selectedParam, setSelectedParam,
   region, setRegion, regions,
   onSaveRegion, onDeleteRegion,
+  floating, onToggleFloat,
 }) {
   const [tab, setTab] = useState("models");
   const [saveName, setSaveName] = useState("");
+  const { offset, handleMouseDown, resetPosition } = useDraggable();
+
+  const floatStyle = floating
+    ? { transform: `translate(${offset.x}px, ${offset.y}px)` }
+    : undefined;
 
   return (
-    <aside className="sidebar">
-      <div className="sidebar-brand">
+    <aside className={`sidebar${floating ? " sidebar-floating" : ""}`} style={floatStyle}>
+      <div className={`sidebar-brand${floating ? " drag-handle" : ""}`} onMouseDown={floating ? handleMouseDown : undefined}>
         <Wind size={18} />
         <span>Model Forecast</span>
+        <button className="btn-icon sidebar-float-toggle" onClick={() => { if (floating) resetPosition(); onToggleFloat(); }} title={floating ? "Dock sidebar" : "Float sidebar"}>
+          {floating ? <PanelLeftClose size={16} /> : <PanelLeftOpen size={16} />}
+        </button>
       </div>
 
       {/* Tab navigation */}

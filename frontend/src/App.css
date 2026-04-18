@@ -20,10 +20,15 @@
   flex-direction: column;
   margin-left: 320px;
   overflow-x: clip;
+  transition: margin-left 0.2s ease;
+}
+.app-main.sidebar-hidden {
+  margin-left: 0;
 }
 
 .map-container {
   position: relative;
+  z-index: 0; /* creates a stacking context so Leaflet pane z-indexes (200-1000) don't escape */
   flex: 1;
   min-height: 0;
 }

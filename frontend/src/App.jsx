@@ -168,6 +168,14 @@ export default function App() {
   const gridRequestIdRef = useRef(0);
   const compareRequestIdRef = useRef(0);
 
+  /* ── Abort controllers for in-flight requests ──────────── */
+  const gridAbortRef = useRef(null);
+  const pointAbortRef = useRef(null);
+
+  /* ── Sidebar float state ────────────────────────────── */
+  const [sidebarFloat, setSidebarFloat] = useState(false);
+  const toggleSidebarFloat = useCallback(() => setSidebarFloat(v => !v), []);
+
   /* ── Map ref for reading current bounds (custom region save) ── */
   const mapInstanceRef = useRef(null);
 
@@ -279,24 +287,27 @@ export default function App() {
       return out;
     };
 
-      /* Helper: draw annotations onto a canvas context at a given x-offset */
+      /* Helper: draw annotations onto a canvas context at a given x-offset.
+         IMPORTANT: caller must reset the canvas transform to identity first
+         (captureMapEl leaves ctx.scale(SCALE,SCALE) active). All coordinates
+         here are in raw canvas pixels — multiply by `scale` for retina. */
       const annotatePanel = (ctx, xOff, W, H, scale, modelLabel, zuluStr) => {
-        const PAD = 16;
+        const PAD = 12;
 
         /* Top-left: parameter name */
         const titleText = `${paramInfo.name}${paramInfo.unit ? ` (${paramInfo.unit})` : ""}`;
-        const titleFontSize = Math.round(16 * scale);
+        const titleFontSize = Math.round(11 * scale);
         ctx.font = `bold ${titleFontSize}px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`;
         const titleMetrics = ctx.measureText(titleText);
-        const titlePadH = Math.round(12 * scale);
-        const titlePadV = Math.round(8 * scale);
+        const titlePadH = Math.round(8 * scale);
+        const titlePadV = Math.round(5 * scale);
         const titleX = xOff + PAD * scale;
         const titleY = PAD * scale;
         const titleBoxW = titleMetrics.width + titlePadH * 2;
         const titleBoxH = titleFontSize + titlePadV * 2;
-        ctx.fillStyle = "rgba(0,0,0,0.7)";
+        ctx.fillStyle = "rgba(0,0,0,0.65)";
         ctx.beginPath();
-        ctx.roundRect(titleX, titleY, titleBoxW, titleBoxH, 6 * scale);
+        ctx.roundRect(titleX, titleY, titleBoxW, titleBoxH, 4 * scale);
         ctx.fill();
         ctx.fillStyle = "#ffffff";
         ctx.textBaseline = "middle";
@@ -306,45 +317,58 @@ export default function App() {
         /* Bottom-left: model + valid time */
         const fhourLabel = `F${String(fhour).padStart(3, "0")}`;
         const stampText = `${modelLabel}  ${fhourLabel}  ${zuluStr}`;
-        const stampFontSize = Math.round(13 * scale);
+        const stampFontSize = Math.round(9 * scale);
         ctx.font = `bold ${stampFontSize}px "SF Mono", "Cascadia Code", "Consolas", monospace`;
         const stampMetrics = ctx.measureText(stampText);
-        const stampPadH = Math.round(10 * scale);
-        const stampPadV = Math.round(6 * scale);
+        const stampPadH = Math.round(8 * scale);
+        const stampPadV = Math.round(5 * scale);
         const stampBoxW = stampMetrics.width + stampPadH * 2;
         const stampBoxH = stampFontSize + stampPadV * 2;
         const stampX = xOff + PAD * scale;
         const stampY = H - PAD * scale - stampBoxH;
-        ctx.fillStyle = "rgba(0,0,0,0.7)";
+        ctx.fillStyle = "rgba(0,0,0,0.65)";
         ctx.beginPath();
-        ctx.roundRect(stampX, stampY, stampBoxW, stampBoxH, 6 * scale);
+        ctx.roundRect(stampX, stampY, stampBoxW, stampBoxH, 4 * scale);
         ctx.fill();
         ctx.fillStyle = "#ffffff";
         ctx.textBaseline = "middle";
         ctx.textAlign = "left";
         ctx.fillText(stampText, stampX + stampPadH, stampY + stampBoxH / 2);
 
+        /* Watermark above the stamp */
+        const wmText = "modelforecast.app";
+        const wmFontSize = Math.round(8 * scale);
+        ctx.font = `${wmFontSize}px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`;
+        ctx.fillStyle = "rgba(0,0,0,0.35)";
+        ctx.textBaseline = "bottom";
+        ctx.textAlign = "left";
+        ctx.fillText(wmText, stampX, stampY - 3 * scale);
+
         /* Bottom-right: color legend */
         const stops = gridData?.color_scale;
         if (stops && stops.length >= 2) {
-          const barW = Math.round(220 * scale);
-          const barH = Math.round(12 * scale);
-          const legendPad = Math.round(10 * scale);
-          const legendGap = Math.round(4 * scale);
-          const labelFontSize = Math.round(10 * scale);
+          const barW = Math.round(200 * scale);
+          const barH = Math.round(10 * scale);
+          const legendPad = Math.round(8 * scale);
+          const legendGap = Math.round(3 * scale);
+          const labelFontSize = Math.round(8 * scale);
           ctx.font = `bold ${labelFontSize}px "SF Mono", "Cascadia Code", "Consolas", monospace`;
 
-          const tickStep = Math.max(1, Math.floor(stops.length / 6));
+          const tickStep = Math.max(1, Math.floor(stops.length / 8));
           const ticks = stops.filter((_, i) => i % tickStep === 0 || i === stops.length - 1);
 
+          /* Unit label below tick labels */
+          const unitText = paramInfo.unit || "";
+          const unitH = unitText ? labelFontSize + legendGap : 0;
+
           const boxW = barW + legendPad * 2;
-          const boxH = barH + legendGap + labelFontSize + legendPad * 2;
+          const boxH = barH + legendGap + labelFontSize + unitH + legendPad * 2;
           const boxX = xOff + W - PAD * scale - boxW;
           const boxY = H - PAD * scale - boxH;
 
-          ctx.fillStyle = "rgba(0,0,0,0.7)";
+          ctx.fillStyle = "rgba(0,0,0,0.65)";
           ctx.beginPath();
-          ctx.roundRect(boxX, boxY, boxW, boxH, 6 * scale);
+          ctx.roundRect(boxX, boxY, boxW, boxH, 4 * scale);
           ctx.fill();
 
           const barX = boxX + legendPad;
@@ -357,7 +381,7 @@ export default function App() {
           }
           ctx.fillStyle = grad;
           ctx.fillRect(barX, barY, barW, barH);
-          ctx.strokeStyle = "rgba(255,255,255,0.3)";
+          ctx.strokeStyle = "rgba(255,255,255,0.25)";
           ctx.lineWidth = 1;
           ctx.strokeRect(barX, barY, barW, barH);
 
@@ -365,10 +389,19 @@ export default function App() {
           ctx.font = `${labelFontSize}px "SF Mono", "Cascadia Code", "Consolas", monospace`;
           ctx.textBaseline = "top";
           ctx.textAlign = "center";
+          const labelsY = barY + barH + legendGap;
           for (const tick of ticks) {
             const t = stops.indexOf(tick) / (stops.length - 1);
             const x = barX + t * barW;
-            ctx.fillText(String(tick[0]), x, barY + barH + legendGap);
+            ctx.fillText(String(tick[0]), x, labelsY);
+          }
+
+          /* Unit label centered below tick labels */
+          if (unitText) {
+            ctx.fillStyle = "rgba(255,255,255,0.6)";
+            ctx.font = `${labelFontSize}px "SF Mono", "Cascadia Code", "Consolas", monospace`;
+            ctx.textAlign = "center";
+            ctx.fillText(unitText, barX + barW / 2, labelsY + labelFontSize + legendGap);
           }
         }
       };
@@ -404,7 +437,7 @@ export default function App() {
         ctx.drawImage(primaryCanvas, 0, 0, W, H);
         ctx.drawImage(compareCanvas, W + GAP, 0, W2, H2);
 
-        /* Annotate each panel */
+        /* Annotate each panel (no scale transform on this fresh canvas) */
         const primaryZulu = validZuluLabel(fhour, gridData?.valid_time, gridData?.run);
         annotatePanel(ctx, 0, W, H, scale, selectedModel?.toUpperCase() || "", primaryZulu);
 
@@ -418,6 +451,7 @@ export default function App() {
       } else {
         /* Single map export — annotate directly on the captured canvas */
         const ctx = primaryCanvas.getContext("2d");
+        ctx.setTransform(1, 0, 0, 1, 0, 0); /* reset captureMapEl's scale(2,2) */
         const zuluLabel = validZuluLabel(fhour, gridData?.valid_time, gridData?.run);
         annotatePanel(ctx, 0, W, H, scale, selectedModel?.toUpperCase() || "", zuluLabel);
 
@@ -501,10 +535,15 @@ export default function App() {
   const pointPanelFetchKeyRef = useRef({ meteogram: null, sounding: null, ensemble: null });
 
   const loadMeteogramForPoint = useCallback(async (lat, lon) => {
+    /* Abort previous point-panel request */
+    if (pointAbortRef.current) pointAbortRef.current.abort();
+    const ac = new AbortController();
+    pointAbortRef.current = ac;
+
     setMeteogramLoading(true);
     setMeteogramData(null);
     try {
-      const raw = await fetchMeteogram({ model: selectedModel, lat, lon });
+      const raw = await fetchMeteogram({ model: selectedModel, lat, lon, signal: ac.signal });
       const vars = raw.variables || {};
       setMeteogramData({
         time: raw.times || [],
@@ -525,6 +564,11 @@ export default function App() {
   }, [selectedModel]);
 
   const loadSoundingForPoint = useCallback(async (lat, lon) => {
+    /* Abort previous point-panel request */
+    if (pointAbortRef.current) pointAbortRef.current.abort();
+    const ac = new AbortController();
+    pointAbortRef.current = ac;
+
     setSoundingLoading(true);
     setSoundingPlot(null);
     try {
@@ -536,6 +580,7 @@ export default function App() {
         theme,
         colorblind,
         run: gridData?.run,
+        signal: ac.signal,
       });
       setSoundingPlot(plot);
     } catch {
@@ -546,10 +591,15 @@ export default function App() {
   }, [selectedModel, fhour, theme, colorblind, gridData?.run]);
 
   const loadEnsembleForPoint = useCallback(async (lat, lon) => {
+    /* Abort previous point-panel request */
+    if (pointAbortRef.current) pointAbortRef.current.abort();
+    const ac = new AbortController();
+    pointAbortRef.current = ac;
+
     setEnsembleLoading(true);
     setEnsembleData(null);
     try {
-      const raw = await fetchEnsemble({ variable: selectedParam, lat, lon });
+      const raw = await fetchEnsemble({ variable: selectedParam, lat, lon, signal: ac.signal });
       setEnsembleData(raw);
     } catch {
       setEnsembleData(null);
@@ -733,6 +783,11 @@ export default function App() {
     const key = frameCacheKey(selectedModel, selectedParam, h, region);
     const requestId = ++gridRequestIdRef.current;
 
+    /* Abort previous in-flight grid request */
+    if (gridAbortRef.current) gridAbortRef.current.abort();
+    const ac = new AbortController();
+    gridAbortRef.current = ac;
+
     /* Hit: skip network + loading state entirely */
     const cached = frameCacheGet(key);
     if (cached) {
@@ -750,6 +805,7 @@ export default function App() {
         parameter: selectedParam,
         fhour: h,
         bbox,
+        signal: ac.signal,
       });
 
       /* Attach matching color scale to grid data for CanvasOverlay */
@@ -768,7 +824,7 @@ export default function App() {
       setGridData(data);
       frameCacheSet(key, data);
     } catch (err) {
-      if (requestId !== gridRequestIdRef.current) return;
+      if (err.aborted || requestId !== gridRequestIdRef.current) return;
       setGridError(err.message);
     } finally {
       if (requestId === gridRequestIdRef.current) setGridLoading(false);
@@ -979,8 +1035,10 @@ export default function App() {
         regions={REGIONS}
         onSaveRegion={handleSaveRegion}
         onDeleteRegion={handleDeleteRegion}
+        floating={sidebarFloat}
+        onToggleFloat={toggleSidebarFloat}
       />
-      <div className="app-main">
+      <div className={`app-main${sidebarFloat ? " sidebar-hidden" : ""}`}>
         <Header
           theme={theme}
           toggleTheme={toggleTheme}
