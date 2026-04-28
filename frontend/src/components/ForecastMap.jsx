@@ -64,6 +64,7 @@ export default function ForecastMap({ gridData, loading, error, bbox, parameter,
     const isDark = document.documentElement.getAttribute("data-theme") !== "light";
     tileRef.current = L.tileLayer(isDark ? DARK_TILES : LIGHT_TILES, {
       attribution: TILE_ATTR,
+      crossOrigin: "anonymous",
       minNativeZoom: 0,
       maxNativeZoom: 18,
       maxZoom: 18,
@@ -72,7 +73,14 @@ export default function ForecastMap({ gridData, loading, error, bbox, parameter,
     mapRef.current = map;
     if (onMapReadyRef.current) onMapReadyRef.current(map);
 
-    return () => { map.remove(); mapRef.current = null; };
+    /* Invalidate map size whenever the container is resized
+       (e.g. sidebar float/dock, window resize, compare mode) */
+    const ro = new ResizeObserver(() => {
+      mapRef.current?.invalidateSize({ animate: false });
+    });
+    ro.observe(mapContainerRef.current);
+
+    return () => { ro.disconnect(); map.remove(); mapRef.current = null; };
   }, []);
 
   /* Update tiles on theme change */
@@ -220,7 +228,7 @@ export default function ForecastMap({ gridData, loading, error, bbox, parameter,
           {cursorValue}
         </div>
       )}
-      <div className="map-watermark">modelforecast.app</div>
+      <div className="map-watermark">modelforecastpy.app</div>
     </div>
   );
 }

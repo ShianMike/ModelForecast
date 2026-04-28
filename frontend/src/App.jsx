@@ -233,15 +233,13 @@ export default function App() {
 
     /**
      * Manually compose a screenshot of a Leaflet map element.
-     * html-to-image cannot capture cross-origin tile images, so we:
-     *   1. Draw the map background colour.
-     *   2. Re-fetch each tile <img> with crossOrigin="anonymous" (CartoCDN supports CORS)
-     *      so the browser issues a fresh CORS request, separate from the non-CORS cache entry.
-     *   3. Draw every <canvas> inside the container (CanvasOverlay, deck.gl, etc.)
-     *      using getBoundingClientRect to get the correct on-screen position.
+     * Tiles are loaded with crossOrigin="anonymous" on the tile layer, so we can
+     * draw them directly onto the canvas without re-fetching.
+     * All canvases (CanvasOverlay, deck.gl, etc.) are drawn using
+     * getBoundingClientRect for correct on-screen positioning.
      */
     const SCALE = 2;
-    const captureMapEl = async (mapEl) => {
+    const captureMapEl = (mapEl) => {
       const rect = mapEl.getBoundingClientRect();
       const W = Math.round(rect.width);
       const H = Math.round(rect.height);
@@ -257,20 +255,17 @@ export default function App() {
       ctx.fillStyle = isDark ? "#1a1a2e" : "#e8e8e8";
       ctx.fillRect(0, 0, W, H);
 
-      // Tile images — re-fetched with CORS so they can be drawn on canvas
+      // Tile images — already loaded with crossOrigin="anonymous" by the tile layer
       const tileImgs = mapEl.querySelectorAll(".leaflet-tile-pane img.leaflet-tile-loaded");
-      await Promise.all(Array.from(tileImgs).map(async (tileImg) => {
+      for (const tileImg of tileImgs) {
         const tr = tileImg.getBoundingClientRect();
         const x = tr.left - rect.left;
         const y = tr.top - rect.top;
         const w = tr.width;
         const h = tr.height;
-        if (w <= 0 || h <= 0) return;
-        const img = new Image();
-        img.crossOrigin = "anonymous";
-        await new Promise((res) => { img.onload = res; img.onerror = res; img.src = tileImg.src; });
-        if (img.naturalWidth > 0) ctx.drawImage(img, x, y, w, h);
-      }));
+        if (w <= 0 || h <= 0) continue;
+        try { ctx.drawImage(tileImg, x, y, w, h); } catch { /* skip tainted */ }
+      }
 
       // All canvases (CanvasOverlay, deck.gl, leaflet-velocity, etc.)
       const canvases = mapEl.querySelectorAll("canvas");
@@ -336,13 +331,18 @@ export default function App() {
         ctx.fillText(stampText, stampX + stampPadH, stampY + stampBoxH / 2);
 
         /* Watermark above the stamp */
-        const wmText = "modelforecast.app";
+        const wmText = "modelforecastpy.app";
         const wmFontSize = Math.round(8 * scale);
-        ctx.font = `${wmFontSize}px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`;
-        ctx.fillStyle = "rgba(0,0,0,0.35)";
+        ctx.font = `600 ${wmFontSize}px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`;
         ctx.textBaseline = "bottom";
         ctx.textAlign = "left";
+        /* Drop shadow for legibility over any map tile */
+        ctx.shadowColor = "rgba(0,0,0,0.75)";
+        ctx.shadowBlur = 3 * scale;
+        ctx.fillStyle = "rgba(255,255,255,0.90)";
         ctx.fillText(wmText, stampX, stampY - 3 * scale);
+        ctx.shadowColor = "transparent";
+        ctx.shadowBlur = 0;
 
         /* Bottom-right: color legend */
         const stops = gridData?.color_scale;
@@ -411,7 +411,7 @@ export default function App() {
 
       /* Capture the primary map */
       const primaryEl = maps[0];
-      const primaryCanvas = await captureMapEl(primaryEl);
+      const primaryCanvas = captureMapEl(primaryEl);
       const W = primaryCanvas.width;
       const H = primaryCanvas.height;
       const scale = SCALE; // captureMapEl always uses SCALE=2
@@ -419,7 +419,7 @@ export default function App() {
       if (isCompare) {
         /* Capture the comparison map */
         const compareEl = maps[1];
-        const compareCanvas = await captureMapEl(compareEl);
+        const compareCanvas = captureMapEl(compareEl);
         const W2 = compareCanvas.width;
         const H2 = compareCanvas.height;
         const GAP = Math.round(4 * scale);

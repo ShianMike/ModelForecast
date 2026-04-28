@@ -380,34 +380,69 @@ const CanvasOverlay = forwardRef(function CanvasOverlay({ map, gridData, paramet
       const is2D = Array.isArray(values[0]);
 
       if (is2D) {
-        /* ── Gap-free 2D grid using midpoint edges ─────────── */
+        /* ── Smooth 2D grid — row-by-row with Mercator-correct y positions ── */
         const latEdges = computeEdges(lats);
         const lonEdges = computeEdges(lons);
+        const nRows = lats.length;
+        const nCols = lons.length;
 
-        for (let i = 0; i < lats.length; i++) {
-          /* Pixel Y edges for this row */
-          const ptTop = map.latLngToContainerPoint([latEdges[i + 1], lons[0]]); /* higher lat = top */
-          const ptBot = map.latLngToContainerPoint([latEdges[i], lons[0]]);     /* lower lat = bottom */
-          const y0 = Math.round(Math.min(ptTop.y, ptBot.y));
-          const y1 = Math.round(Math.max(ptTop.y, ptBot.y));
-          const rowH = Math.max(y1 - y0, 1);
+        /* Lats from backends are always ascending (south→north). */
+        const latAsc = nRows < 2 || lats[1] >= lats[0];
 
-          for (let j = 0; j < lons.length; j++) {
-            const val = values[i]?.[j];
+        /* Horizontal screen extents are lat-independent in Mercator — compute once. */
+        const refLat = lats[Math.floor(nRows / 2)];
+        const ptWest  = map.latLngToContainerPoint([refLat, lonEdges[0]]);
+        const ptEast  = map.latLngToContainerPoint([refLat, lonEdges[nCols]]);
+        const drawX = Math.min(ptWest.x, ptEast.x);
+        const drawW = Math.max(1, Math.abs(ptEast.x - ptWest.x));
+
+        /* Build a full-resolution nCols×nRows offscreen canvas (north→south order).
+           All pixels are filled before any drawImage, so smoothing never bleeds
+           into transparent neighbours — eliminating blurriness. */
+        const gridCanvas = document.createElement("canvas");
+        gridCanvas.width  = nCols;
+        gridCanvas.height = nRows;
+        const gc = gridCanvas.getContext("2d");
+        const fullData = gc.createImageData(nCols, nRows);
+        const d = fullData.data;
+
+        for (let i = 0; i < nRows; i++) {
+          /* Row 0 of gridCanvas = northernmost lat row on screen */
+          const latIdx = latAsc ? (nRows - 1 - i) : i;
+          for (let j = 0; j < nCols; j++) {
+            const val = values[latIdx]?.[j];
             if (val == null || isNaN(val)) continue;
-
-            const ptLeft = map.latLngToContainerPoint([lats[i], lonEdges[j]]);
-            const ptRight = map.latLngToContainerPoint([lats[i], lonEdges[j + 1]]);
-            const x0 = Math.round(Math.min(ptLeft.x, ptRight.x));
-            const x1 = Math.round(Math.max(ptLeft.x, ptRight.x));
-            const colW = Math.max(x1 - x0, 1);
-
             const color = interpolateColor(val, stops);
-            const a = ((color[3] ?? 180) / 255) * opacity;
-            ctx.fillStyle = `rgba(${color[0]},${color[1]},${color[2]},${a})`;
-            ctx.fillRect(x0, y0, colW, rowH);
+            const alpha = Math.round(((color[3] ?? 180) / 255) * opacity * 255);
+            const px = (i * nCols + j) * 4;
+            d[px]     = color[0];
+            d[px + 1] = color[1];
+            d[px + 2] = color[2];
+            d[px + 3] = alpha;
           }
         }
+        gc.putImageData(fullData, 0, 0);
+
+        /* Stamp each row from the offscreen canvas using Mercator-correct y bounds.
+           imageSmoothingEnabled = false → no blurring when scaling to screen width. */
+        ctx.save();
+        ctx.imageSmoothingEnabled = false;
+
+        for (let i = 0; i < nRows; i++) {
+          const latIdx = latAsc ? (nRows - 1 - i) : i;
+          const northEdgeLat = latAsc ? latEdges[latIdx + 1] : latEdges[latIdx];
+          const southEdgeLat = latAsc ? latEdges[latIdx]     : latEdges[latIdx + 1];
+
+          const ptTop = map.latLngToContainerPoint([northEdgeLat, refLat]);
+          const ptBot = map.latLngToContainerPoint([southEdgeLat, refLat]);
+          const y0   = Math.min(ptTop.y, ptBot.y);
+          const rowH = Math.max(0.5, Math.abs(ptBot.y - ptTop.y));
+
+          /* src row i in gridCanvas → dest rect on main canvas */
+          ctx.drawImage(gridCanvas, 0, i, nCols, 1, drawX, y0, drawW, rowH);
+        }
+
+        ctx.restore();
 
         /* ── Wind barbs (if u/v data present) ──────────────── */
         const uComp = gridData.u_component;
