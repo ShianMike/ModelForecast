@@ -18,6 +18,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY app.py gunicorn.conf.py ./
 COPY routes/ routes/
 COPY forecast/ forecast/
+COPY forecast_artifacts/ forecast_artifacts/
 
 # Copy built frontend from stage 1
 COPY --from=frontend-build /app/frontend/dist frontend/dist
