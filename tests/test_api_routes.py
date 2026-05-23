@@ -225,8 +225,11 @@ class ApiRouteTests(unittest.TestCase):
         with patch("routes.forecast_routes.run_cache.is_enabled", return_value=False), patch(
             "routes.forecast_routes._COMPOSITE_MAX_MAP_CELLS", 4
         ), patch("routes.forecast_routes._COMPOSITE_MAX_MAP_SIDE", 4), patch(
-            "routes.forecast_routes._fetch_grid",
+            "routes.forecast_routes.open_meteo.fetch_grid_forecast",
             side_effect=fake_fetch,
+        ), patch(
+            "routes.forecast_routes._fetch_grid",
+            side_effect=AssertionError("grib fetch should not run for supported composites"),
         ):
             response = self.client.get(
                 "/api/forecast",
@@ -260,8 +263,11 @@ class ApiRouteTests(unittest.TestCase):
             return build_test_grid(variable)
 
         with patch("routes.forecast_routes.run_cache.is_enabled", return_value=False), patch(
-            "routes.forecast_routes._fetch_grid",
+            "routes.forecast_routes.open_meteo.fetch_grid_forecast",
             side_effect=fake_fetch,
+        ), patch(
+            "routes.forecast_routes._fetch_grid",
+            side_effect=AssertionError("grib fetch should not run for supported composites"),
         ):
             response = self.client.get(
                 "/api/forecast",
@@ -282,6 +288,33 @@ class ApiRouteTests(unittest.TestCase):
             ["cape", "wind_speed_10m", "wind_speed_500hPa", "temperature_850hPa"],
         )
         self.assertNotIn("geopotential_height_500hPa", calls)
+
+    def test_composite_forecast_open_meteo_failure_does_not_fallback_to_grib(self):
+        with patch("routes.forecast_routes.run_cache.is_enabled", return_value=False), patch(
+            "routes.forecast_routes.open_meteo.fetch_grid_forecast",
+            side_effect=RuntimeError("open-meteo unavailable"),
+        ), patch(
+            "routes.forecast_routes._fetch_grid",
+            side_effect=AssertionError("grib fallback should not run"),
+        ):
+            response = self.client.get(
+                "/api/forecast",
+                query_string={
+                    "model": "hrrr",
+                    "variable": "stp_approx",
+                    "fhour": "0",
+                    "lat_min": "0",
+                    "lat_max": "3",
+                    "lon_min": "0",
+                    "lon_max": "3",
+                },
+            )
+
+        self.assertEqual(response.status_code, 502)
+        self.assertEqual(
+            response.get_json(),
+            {"error": "Failed to compute 'stp_approx' forecast."},
+        )
 
     def test_cross_section_rejects_out_of_range_coordinates(self):
         response = self.client.get(

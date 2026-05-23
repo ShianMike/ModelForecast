@@ -1380,7 +1380,16 @@ def _fetch_grid(model, variable, fhour, bbox):
 
 def _fetch_composite_grid(model, variable, fhour, bbox):
     """Fetch a component field at a coarser working resolution for composites."""
-    grid = _fetch_grid(model, variable, fhour, bbox)
+    model_key = model.lower()
+    if variable in open_meteo.get_supported_variables(model_key):
+        grid = open_meteo.fetch_grid_forecast(model_key, variable, fhour, bbox)
+    else:
+        log.warning(
+            "Open-Meteo does not support composite component %s/%s; falling back to GRIB",
+            model_key,
+            variable,
+        )
+        grid = _fetch_grid(model_key, variable, fhour, bbox)
     return thin_grid_result(
         grid,
         bbox=bbox,
