@@ -24,6 +24,7 @@ from forecast import aws_grib
 from forecast import open_meteo
 from forecast import ecmwf
 from forecast import run_cache
+from forecast.grid_utils import thin_grid_result
 from forecast.open_meteo import RateLimitError
 from forecast.parameters import get_color_scale
 from routes.helpers import (
@@ -38,6 +39,9 @@ from routes.helpers import (
 log = logging.getLogger(__name__)
 
 bp = Blueprint("forecast", __name__)
+
+_COMPOSITE_MAX_MAP_CELLS = 18_000
+_COMPOSITE_MAX_MAP_SIDE = 180
 
 
 # ─── Point endpoint cache (sounding) ───────────────────────
@@ -1374,6 +1378,17 @@ def _fetch_grid(model, variable, fhour, bbox):
     )
 
 
+def _fetch_composite_grid(model, variable, fhour, bbox):
+    """Fetch a component field at a coarser working resolution for composites."""
+    grid = _fetch_grid(model, variable, fhour, bbox)
+    return thin_grid_result(
+        grid,
+        bbox=bbox,
+        max_cells=_COMPOSITE_MAX_MAP_CELLS,
+        max_side=_COMPOSITE_MAX_MAP_SIDE,
+    )
+
+
 def _compute_bulk_shear(grids, fhour):
     """Effective Bulk Shear ≈ |V500 − Vsfc| (scalar approx, kt)."""
     sfc = grids["wind_speed_10m"]
@@ -1633,11 +1648,8 @@ def get_forecast():
                 fetch_var = "temperature_850hPa" if comp_var == "temperature_500hPa_raw" else comp_var
                 # For 500mb temp, override grib params to use 500mb level
                 if comp_var == "temperature_500hPa_raw":
-                    g = _fetch_grid(model, "geopotential_height_500hPa", fhour, bbox)
-                    # Re-fetch as temperature at 500mb via NOMADS trick:
-                    # We use the 850mb temp fetch path but just need any grid;
-                    # approximate 500mb temp from 850mb: T500 ≈ T850 - 25°C
-                    t850 = _fetch_grid(model, "temperature_850hPa", fhour, bbox)
+                    # Approximate 500mb temperature from 850mb: T500 ~= T850 - 25C.
+                    t850 = _fetch_composite_grid(model, "temperature_850hPa", fhour, bbox)
                     # Approximate 500mb temperature (rough lapse rate)
                     approx_vals = []
                     for row in t850["values"]:
@@ -1646,7 +1658,7 @@ def get_forecast():
                         ])
                     grids[comp_var] = {**t850, "values": approx_vals}
                 else:
-                    grids[comp_var] = _fetch_grid(model, fetch_var, fhour, bbox)
+                    grids[comp_var] = _fetch_composite_grid(model, fetch_var, fhour, bbox)
             compute_fn = globals()[comp["compute"]]
             result = compute_fn(grids, fhour)
             # Preserve timing metadata from source grids so frontend time labels stay synced.

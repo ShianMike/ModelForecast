@@ -54,6 +54,29 @@ def build_test_sounding(*_args, **_kwargs):
     }
 
 
+def build_test_grid(variable, size=4):
+    base_values = {
+        "cape": 1200.0,
+        "convective_inhibition": -25.0,
+        "wind_speed_10m": 20.0,
+        "wind_speed_500hPa": 55.0,
+        "wind_speed_850hPa": 35.0,
+        "temperature_850hPa": 8.0,
+    }
+    value = base_values.get(variable, 1.0)
+    return {
+        "model": "hrrr",
+        "variable": variable,
+        "forecast_hour": 0,
+        "lats": [float(i) for i in range(size)],
+        "lons": [float(i) for i in range(size)],
+        "values": [[value for _ in range(size)] for _ in range(size)],
+        "unit": "",
+        "run": "20260523/07z",
+        "valid_time": "2026-05-23T07:00:00Z",
+    }
+
+
 class ApiRouteTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -191,6 +214,74 @@ class ApiRouteTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.get_json(), cached_payload)
+
+    def test_composite_forecast_downsamples_component_grids(self):
+        calls = []
+
+        def fake_fetch(_model, variable, _fhour, _bbox):
+            calls.append(variable)
+            return build_test_grid(variable)
+
+        with patch("routes.forecast_routes.run_cache.is_enabled", return_value=False), patch(
+            "routes.forecast_routes._COMPOSITE_MAX_MAP_CELLS", 4
+        ), patch("routes.forecast_routes._COMPOSITE_MAX_MAP_SIDE", 4), patch(
+            "routes.forecast_routes._fetch_grid",
+            side_effect=fake_fetch,
+        ):
+            response = self.client.get(
+                "/api/forecast",
+                query_string={
+                    "model": "hrrr",
+                    "variable": "stp_approx",
+                    "fhour": "0",
+                    "lat_min": "0",
+                    "lat_max": "3",
+                    "lon_min": "0",
+                    "lon_max": "3",
+                },
+            )
+
+        payload = response.get_json()
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            calls,
+            ["cape", "convective_inhibition", "wind_speed_10m", "wind_speed_500hPa"],
+        )
+        self.assertLess(len(payload["values"]), 4)
+        self.assertLess(len(payload["values"][0]), 4)
+        self.assertEqual(payload["run"], "20260523/07z")
+        self.assertEqual(payload["valid_time"], "2026-05-23T07:00:00Z")
+
+    def test_ship_composite_skips_unused_height_grid_fetch(self):
+        calls = []
+
+        def fake_fetch(_model, variable, _fhour, _bbox):
+            calls.append(variable)
+            return build_test_grid(variable)
+
+        with patch("routes.forecast_routes.run_cache.is_enabled", return_value=False), patch(
+            "routes.forecast_routes._fetch_grid",
+            side_effect=fake_fetch,
+        ):
+            response = self.client.get(
+                "/api/forecast",
+                query_string={
+                    "model": "hrrr",
+                    "variable": "ship",
+                    "fhour": "0",
+                    "lat_min": "0",
+                    "lat_max": "3",
+                    "lon_min": "0",
+                    "lon_max": "3",
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            calls,
+            ["cape", "wind_speed_10m", "wind_speed_500hPa", "temperature_850hPa"],
+        )
+        self.assertNotIn("geopotential_height_500hPa", calls)
 
     def test_cross_section_rejects_out_of_range_coordinates(self):
         response = self.client.get(
