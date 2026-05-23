@@ -1,0 +1,46 @@
+name: Generate Forecast Artifacts
+
+on:
+  schedule:
+    # 00z, 06z, 12z, and 18z artifacts after a two-hour data availability buffer.
+    - cron: "30 2,8,14,20 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  severe-composites:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install backend dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Generate HRRR severe composite artifacts
+        run: |
+          python scripts/generate_forecast_artifacts.py \
+            --models hrrr \
+            --regions conus \
+            --variables effective_bulk_shear stp_approx scp ship critical_angle_composite \
+            --hours auto
+
+      - name: Commit artifact updates
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add forecast_artifacts
+          if git diff --cached --quiet; then
+            echo "No artifact changes to commit."
+          else
+            git commit -m "chore: refresh forecast artifacts"
+            git push
+          fi

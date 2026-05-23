@@ -8,6 +8,7 @@ from io import BytesIO
 import json
 import math
 import logging
+import os
 import re
 import time
 import threading
@@ -23,6 +24,7 @@ from forecast import nomads
 from forecast import aws_grib
 from forecast import open_meteo
 from forecast import ecmwf
+from forecast import artifact_cache
 from forecast import run_cache
 from forecast.grid_utils import thin_grid_result
 from forecast.open_meteo import RateLimitError
@@ -372,6 +374,10 @@ def _extract_cross_section_profile_value(level_row, var_base):
 
 
 def _load_persistent_forecast_cache(model, variable, fhour, bbox):
+    artifact_payload = artifact_cache.load_latest(model, variable, fhour, bbox)
+    if artifact_payload is not None:
+        return artifact_payload, artifact_payload.get("run")
+
     if not run_cache.is_enabled() or not run_cache.supports_model(model):
         return None, None
 
@@ -386,6 +392,17 @@ def _store_persistent_forecast_cache(model, variable, fhour, bbox, payload, requ
     if not run_cache.is_enabled() or not run_cache.supports_model(model):
         return
     run_cache.store_latest(model, variable, fhour, bbox, payload, requested_run=requested_run)
+
+
+def _artifact_only_variables():
+    raw = os.environ.get("FORECAST_ARTIFACT_ONLY_VARIABLES", "").strip()
+    if not raw:
+        return set()
+    return {part.strip() for part in raw.split(",") if part.strip()}
+
+
+def _requires_forecast_artifact(variable):
+    return variable in _artifact_only_variables()
 
 
 def _nearest_message_value(msg, lat, lon):
@@ -1641,6 +1658,12 @@ def get_forecast():
 
     # Handle composite/derived parameters
     if variable in COMPOSITE_PARAMS:
+        if _requires_forecast_artifact(variable):
+            return json_error(
+                f"Precomputed '{variable}' forecast artifact is not available yet.",
+                503,
+            )
+
         comp = COMPOSITE_PARAMS[variable]
         # Check that all component variables are supported by this model
         missing = [v for v in comp["components"]

@@ -215,6 +215,69 @@ class ApiRouteTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.get_json(), cached_payload)
 
+    def test_forecast_serves_local_artifact_before_persistent_cache(self):
+        artifact_payload = {
+            "model": "hrrr",
+            "variable": "stp_approx",
+            "forecast_hour": 0,
+            "lats": [35.0],
+            "lons": [-97.0],
+            "values": [[1.2]],
+            "run": "20260523/06z",
+            "source": "precomputed_artifact",
+        }
+
+        with patch(
+            "routes.forecast_routes.artifact_cache.load_latest",
+            return_value=artifact_payload,
+        ), patch(
+            "routes.forecast_routes.run_cache.resolve_candidate_run",
+            side_effect=AssertionError("gcs cache should not run after artifact hit"),
+        ), patch(
+            "routes.forecast_routes.open_meteo.fetch_grid_forecast",
+            side_effect=AssertionError("live fetch should not run after artifact hit"),
+        ):
+            response = self.client.get(
+                "/api/forecast",
+                query_string={
+                    "model": "hrrr",
+                    "variable": "stp_approx",
+                    "fhour": "0",
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json(), artifact_payload)
+
+    def test_artifact_only_composite_returns_503_when_artifact_missing(self):
+        with patch.dict(
+            "os.environ",
+            {"FORECAST_ARTIFACT_ONLY_VARIABLES": "stp_approx"},
+        ), patch(
+            "routes.forecast_routes.artifact_cache.load_latest",
+            return_value=None,
+        ), patch(
+            "routes.forecast_routes.run_cache.is_enabled",
+            return_value=False,
+        ), patch(
+            "routes.forecast_routes.open_meteo.fetch_grid_forecast",
+            side_effect=AssertionError("live composite fetch should not run in artifact-only mode"),
+        ):
+            response = self.client.get(
+                "/api/forecast",
+                query_string={
+                    "model": "hrrr",
+                    "variable": "stp_approx",
+                    "fhour": "0",
+                },
+            )
+
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(
+            response.get_json(),
+            {"error": "Precomputed 'stp_approx' forecast artifact is not available yet."},
+        )
+
     def test_composite_forecast_downsamples_component_grids(self):
         calls = []
 

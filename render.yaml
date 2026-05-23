@@ -15,3 +15,5 @@ services:
         value: "1"
       - key: GUNICORN_THREADS
         value: "4"
+      - key: FORECAST_ARTIFACT_ONLY_VARIABLES
+        value: "effective_bulk_shear,stp_approx,scp,ship,critical_angle_composite"
