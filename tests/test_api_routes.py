@@ -1,4 +1,5 @@
 import unittest
+import base64
 import threading
 from collections import OrderedDict
 from unittest.mock import patch
@@ -257,6 +258,28 @@ class ApiRouteTests(unittest.TestCase):
             response.get_json(),
             {"error": "Failed to fetch sounding data from upstream providers."},
         )
+
+    def test_sounding_plot_renders_locally(self):
+        with patch(
+            "routes.forecast_routes._build_grib_sounding",
+            side_effect=build_test_sounding,
+        ):
+            response = self.client.get(
+                "/api/sounding-plot",
+                query_string={
+                    "model": "gfs",
+                    "lat": "35",
+                    "lon": "-97",
+                    "fhour": "3",
+                },
+            )
+
+        payload = response.get_json()
+        image = base64.b64decode(payload["image"])
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(image[:8], b"\x89PNG\r\n\x1a\n")
+        self.assertGreater(len(image), 1024)
+        self.assertEqual(payload["meta"]["source"], "nomads_grib")
 
     def test_cross_section_uses_requested_variable(self):
         with patch(

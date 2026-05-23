@@ -5,12 +5,12 @@
 [![GitHub forks](https://img.shields.io/github/forks/ShianMike/ModelForecast?style=flat-square)](https://github.com/ShianMike/ModelForecast/forks)
 [![Made with Python](https://img.shields.io/badge/Python-3.12-3776AB?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
 [![Made with React](https://img.shields.io/badge/React-18-61DAFB?style=flat-square&logo=react&logoColor=black)](https://react.dev/)
-[![Deployed on Cloud Run](https://img.shields.io/badge/Cloud%20Run-deployed-4285F4?style=flat-square&logo=googlecloud&logoColor=white)](https://model-forecast-693545589581.us-central1.run.app)
+[![Docker Ready](https://img.shields.io/badge/Docker-ready-2496ED?style=flat-square&logo=docker&logoColor=white)](./Dockerfile)
 [![License](https://img.shields.io/badge/license-Educational%20%2F%20Research-green?style=flat-square)](#license)
 
 A full-stack weather model forecast viewer that fetches real-time gridded forecast data from NOAA NOMADS, decodes GRIB2 with a pure-Python decoder, and renders interactive map overlays with wind arrows, color-coded parameters, contour lines, animation controls, and point analysis tools — inspired by Pivotal Weather and Aguacero.
 
-**Live site:** <https://shianmike.github.io/ModelForecast/>
+**Live site:** <https://modelforecastpy.app/>
 
 ---
 
@@ -26,7 +26,7 @@ A full-stack weather model forecast viewer that fetches real-time gridded foreca
 - **Region presets** — CONUS, North America, Global, North Atlantic, West Pacific, and custom saved regions
 
 ### Point Analysis Tools
-- **Sounding Profile** — click map to fetch a full Skew-T/Log-P plot via [Sounding Analysis](https://github.com/ShianMike/SoundingAnalysis) integration, with download and external link buttons
+- **Sounding Profile** — click map to fetch and render a model sounding plot directly from Model Forecast GRIB profile data
 - **Meteogram** — time-series forecast at a clicked point across all forecast hours
 - **Cross-Section** — vertical cross-section along a user-drawn line
 - **Ensemble Plume** — GFS ensemble spread with percentile bands at a clicked point
@@ -96,7 +96,8 @@ Server-side computed derived parameters:
 ├── gunicorn.conf.py       # Gunicorn WSGI config (reads PORT from env)
 ├── requirements.txt       # Python dependencies
 ├── Dockerfile             # Multi-stage build (Node + Python)
-├── deploy.ps1             # Frontend build + GitHub Pages deploy script
+├── render.yaml            # Free Docker web-service blueprint
+├── free_hosting_deployment.md
 ├── forecast/              # Core data package
 │   ├── nomads.py            # NOMADS GRIB filter client (4 models, 20 variables)
 │   ├── grib2.py             # Pure-Python GRIB2 decoder (lat/lon + Lambert grids)
@@ -158,21 +159,18 @@ The Vite dev server proxies `/api` requests to the backend at `localhost:5001`.
 
 | Component | Platform | URL |
 |-----------|----------|-----|
-| **Backend** | Google Cloud Run (us-central1) | `https://model-forecast-693545589581.us-central1.run.app` |
-| **Frontend** | GitHub Pages | `https://shianmike.github.io/ModelForecast/` |
+| **App** | Docker web service | `https://modelforecastpy.app/` |
 
-**Cloud Run config:** 1 GiB memory, 2 vCPU, min 1 instance, max 3 instances, 300 s timeout.
-Persistent run cache: `gs://model-forecast-run-cache-693545589581`
+The app is a single Dockerized Flask service that builds and serves the React frontend.
 
 ### Deploy Commands
 
 ```powershell
-# Backend → Cloud Run
-gcloud run deploy model-forecast --source . --project model-forecast-app --region us-central1 --platform managed --allow-unauthenticated --memory 1Gi --cpu 1 --timeout 300 --max-instances 2 --concurrency 10 --port 8080 --set-env-vars "GUNICORN_THREADS=4,WEB_CONCURRENCY=2,FORECAST_CACHE_BUCKET=model-forecast-run-cache-693545589581" --quiet
-
-# Frontend → GitHub Pages
-.\deploy.ps1
+# Free Docker host blueprint
+# Render reads render.yaml from the repo root.
 ```
+
+See [free_hosting_deployment.md](./free_hosting_deployment.md) for the current non-Google deployment path.
 
 ---
 
@@ -230,12 +228,6 @@ gcloud run deploy model-forecast --source . --project model-forecast-app --regio
 | Recharts 3.7 | Charts |
 | html2canvas-pro | PNG export |
 | Lucide React | SVG iconography |
-
----
-
-## Related Projects
-
-- **[Sounding Analysis](https://github.com/ShianMike/SoundingAnalysis)** — Upper-air sounding analysis platform with Skew-T, hodograph, 50+ parameters, risk scanner, and radar overlays. Model Forecast integrates with SA for point sounding plots.
 
 ---
 

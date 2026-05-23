@@ -1,9 +1,7 @@
 import { useState } from "react";
-import { X, Minus, Download, ExternalLink } from "lucide-react";
+import { X, Minus, Download } from "lucide-react";
 import useDraggable from "../hooks/useDraggable";
 import "./SoundingProfile.css";
-
-const SA_URL = "https://shianmike.github.io/SoundingAnalysis/";
 
 export default function SoundingProfile({ plot, loading, point, model, fhour = 0, onClose }) {
   const { offset, handleMouseDown } = useDraggable();
@@ -17,10 +15,6 @@ export default function SoundingProfile({ plot, loading, point, model, fhour = 0
     link.href = `data:image/png;base64,${plot.image}`;
     link.click();
   };
-
-  const saLink = point
-    ? `${SA_URL}?source=psu&lat=${point.lat.toFixed(2)}&lon=${point.lon.toFixed(2)}&model=${model || "gfs"}&fhour=${fhour}`
-    : null;
 
   if (loading) {
     return (
@@ -75,11 +69,6 @@ export default function SoundingProfile({ plot, loading, point, model, fhour = 0
           <button className="btn-icon" onClick={handleDownload} title="Download sounding image">
             <Download size={14} />
           </button>
-          {saLink && (
-            <a className="btn-icon" href={saLink} target="_blank" rel="noopener noreferrer" title="Open in Sounding Analysis">
-              <ExternalLink size={14} />
-            </a>
-          )}
           <button className="btn-icon" onClick={() => setCollapsed(c => !c)}><Minus size={14} /></button>
           <button className="btn-icon" onClick={onClose}><X size={14} /></button>
         </div>

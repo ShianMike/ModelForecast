@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Map, Layers, Wind, CloudRain, Globe, Zap, Cloud, Compass, RefreshCw, Snowflake, Leaf, ExternalLink, Plus, Trash2, PanelLeftClose, PanelLeftOpen } from "lucide-react";
+import { Map, Layers, Wind, CloudRain, Globe, Zap, Cloud, Compass, RefreshCw, Snowflake, Leaf, Plus, Trash2, PanelLeftClose, PanelLeftOpen } from "lucide-react";
 import ParameterPicker from "./ParameterPicker";
 import useDraggable from "../hooks/useDraggable";
 import "./Sidebar.css";
@@ -141,18 +141,6 @@ export default function Sidebar({
             </div>
           </div>
         )}
-      </div>
-
-      <div className="sidebar-footer">
-        <a
-          href="https://shianmike.github.io/SoundingAnalysis/"
-          target="_blank"
-          rel="noopener noreferrer"
-          className="btn sidebar-link-btn"
-        >
-          <ExternalLink size={14} />
-          Sounding Analysis
-        </a>
       </div>
     </aside>
   );

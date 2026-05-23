@@ -3,6 +3,8 @@ Forecast API routes — gridded data and point forecasts.
 Core forecast endpoints use NOAA GRIB sources (NOMADS first, AWS mirror second)
 for GFS, NAM, RAP, and HRRR. Ensemble data remains on Open-Meteo.
 """
+import base64
+from io import BytesIO
 import json
 import math
 import logging
@@ -14,8 +16,8 @@ from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import numpy as np
-import requests as http_requests
 from flask import Blueprint, Response, jsonify, request
+from PIL import Image, ImageDraw, ImageFont
 
 from forecast import nomads
 from forecast import aws_grib
@@ -1759,8 +1761,7 @@ def get_sounding():
         return json_error("Failed to fetch sounding data from upstream providers.", 502)
 
 
-# ─── Sounding plot proxy (Sounding Analysis project) ───────
-_SOUNDING_API = "https://soundinganalysis-752306366750.asia-southeast1.run.app/api/sounding"
+# ─── Local sounding plot renderer ─────────────────────────
 _SOUNDING_PLOT_CACHE = {}
 _SOUNDING_PLOT_CACHE_LOCK = threading.Lock()
 _SOUNDING_PLOT_TTL = 1200  # 20 min
@@ -1786,10 +1787,224 @@ def _plot_cache_set(key, data):
         _SOUNDING_PLOT_CACHE[key] = {"data": data, "ts": time.time()}
 
 
+def _plot_font(size, bold=False):
+    candidates = [
+        "DejaVuSans-Bold.ttf" if bold else "DejaVuSans.ttf",
+        "Arial Bold.ttf" if bold else "Arial.ttf",
+    ]
+    for path in candidates:
+        try:
+            return ImageFont.truetype(path, size)
+        except OSError:
+            continue
+    return ImageFont.load_default()
+
+
+def _safe_float(value):
+    try:
+        if value is None:
+            return None
+        value = float(value)
+        if not math.isfinite(value):
+            return None
+        return value
+    except (TypeError, ValueError):
+        return None
+
+
+def _draw_dashed_line(draw, start, end, fill, width=1, dash=8, gap=6):
+    x1, y1 = start
+    x2, y2 = end
+    length = math.hypot(x2 - x1, y2 - y1)
+    if length <= 0:
+        return
+    dx = (x2 - x1) / length
+    dy = (y2 - y1) / length
+    pos = 0.0
+    while pos < length:
+        seg_end = min(pos + dash, length)
+        draw.line(
+            (
+                x1 + dx * pos,
+                y1 + dy * pos,
+                x1 + dx * seg_end,
+                y1 + dy * seg_end,
+            ),
+            fill=fill,
+            width=width,
+        )
+        pos += dash + gap
+
+
+def _render_local_sounding_png(sounding, theme="dark", colorblind=False):
+    profile = [
+        lv for lv in sounding.get("profile", [])
+        if _safe_float(lv.get("pressure")) is not None
+    ]
+    profile = sorted(profile, key=lambda lv: -float(lv["pressure"]))
+    if len(profile) < 3:
+        raise ValueError("Not enough sounding levels to render")
+
+    dark = str(theme).lower() != "light"
+    bg = "#07111f" if dark else "#f8fafc"
+    panel = "#0c1a2b" if dark else "#ffffff"
+    border = "#29445f" if dark else "#cbd5e1"
+    grid = "#20364d" if dark else "#d9e2ec"
+    text = "#e6f1ff" if dark else "#0f172a"
+    muted = "#8fb3d1" if dark else "#52677c"
+    temp_color = "#ff756f" if not colorblind else "#d55e00"
+    dew_color = "#65d98b" if not colorblind else "#009e73"
+    wind_color = "#92c5ff" if dark else "#2563eb"
+
+    width, height = 1200, 900
+    image = Image.new("RGB", (width, height), bg)
+    draw = ImageDraw.Draw(image, "RGBA")
+
+    plot_left, plot_top = 92, 118
+    plot_right, plot_bottom = 875, 770
+    plot_w = plot_right - plot_left
+    plot_h = plot_bottom - plot_top
+    side_left, side_right = 915, 1148
+    p_bottom, p_top = 1000.0, 100.0
+    t_min, t_max = -80.0, 50.0
+    skew_px = 168.0
+
+    title_font = _plot_font(32, bold=True)
+    label_font = _plot_font(19, bold=True)
+    small_font = _plot_font(16)
+    tiny_font = _plot_font(13)
+
+    draw.rectangle((0, 0, width, height), fill=bg)
+    draw.rounded_rectangle((38, 34, width - 38, height - 36), radius=18, fill=panel, outline=border, width=2)
+
+    model = str(sounding.get("model", "model")).upper()
+    fhour = int(sounding.get("forecast_hour") or 0)
+    valid = sounding.get("valid_time") or ""
+    lat = _safe_float(sounding.get("lat"))
+    lon = _safe_float(sounding.get("lon"))
+    point = ""
+    if lat is not None and lon is not None:
+        point = f"  {lat:.2f}N, {lon:.2f}W"
+    draw.text((72, 58), f"{model} Sounding - F{fhour:03d}", font=title_font, fill=text)
+    draw.text((74, 94), f"{valid}{point}", font=small_font, fill=muted)
+
+    draw.rectangle((plot_left, plot_top, plot_right, plot_bottom), fill=(255, 255, 255, 6), outline=border, width=1)
+
+    log_span = math.log(p_bottom) - math.log(p_top)
+
+    def y_for_p(pressure):
+        pressure = max(p_top, min(p_bottom, float(pressure)))
+        ratio = (math.log(p_bottom) - math.log(pressure)) / log_span
+        return plot_bottom - ratio * plot_h
+
+    def x_for_tp(temp_c, pressure):
+        pressure = max(p_top, min(p_bottom, float(pressure)))
+        ratio = (math.log(p_bottom) - math.log(pressure)) / log_span
+        return plot_left + ((float(temp_c) - t_min) / (t_max - t_min)) * plot_w + ratio * skew_px
+
+    pressure_ticks = [1000, 925, 850, 700, 500, 300, 250, 200, 150, 100]
+    for pressure in pressure_ticks:
+        y = y_for_p(pressure)
+        draw.line((plot_left, y, plot_right, y), fill=grid, width=1)
+        draw.text((48, y - 9), str(pressure), font=tiny_font, fill=muted)
+
+    for temp in range(-80, 60, 10):
+        x1 = x_for_tp(temp, p_bottom)
+        x2 = x_for_tp(temp, p_top)
+        _draw_dashed_line(draw, (x1, plot_bottom), (x2, plot_top), fill=(80, 112, 144, 115), width=1, dash=5, gap=8)
+        if plot_left <= x1 <= plot_right:
+            draw.text((x1 - 12, plot_bottom + 10), str(temp), font=tiny_font, fill=muted)
+
+    draw.text((plot_left + plot_w / 2 - 80, height - 78), "Temperature (C)", font=small_font, fill=muted)
+    draw.text((45, plot_top - 28), "hPa", font=small_font, fill=muted)
+
+    def points_for(field):
+        pts = []
+        for lv in profile:
+            pressure = _safe_float(lv.get("pressure"))
+            value = _safe_float(lv.get(field))
+            if pressure is not None and value is not None and p_top <= pressure <= p_bottom:
+                pts.append((x_for_tp(value, pressure), y_for_p(pressure)))
+        return pts
+
+    for pts, color in ((points_for("dewpoint"), dew_color), (points_for("temperature"), temp_color)):
+        if len(pts) >= 2:
+            draw.line(pts, fill=color, width=4, joint="curve")
+        for x, y in pts:
+            draw.ellipse((x - 3, y - 3, x + 3, y + 3), fill=color)
+
+    draw.line((plot_left + 22, plot_top + 28, plot_left + 72, plot_top + 28), fill=temp_color, width=4)
+    draw.text((plot_left + 84, plot_top + 18), "Temp", font=tiny_font, fill=text)
+    draw.line((plot_left + 152, plot_top + 28, plot_left + 202, plot_top + 28), fill=dew_color, width=4)
+    draw.text((plot_left + 214, plot_top + 18), "Dewpoint", font=tiny_font, fill=text)
+
+    # Wind column. Draw simple vectors scaled by speed; meteorological direction is "from".
+    draw.text((side_left, plot_top), "Wind", font=label_font, fill=text)
+    for pressure in pressure_ticks[:-1]:
+        level = min(
+            profile,
+            key=lambda lv: abs((_safe_float(lv.get("pressure")) or 0) - pressure),
+        )
+        wspd = _safe_float(level.get("wind_speed"))
+        wdir = _safe_float(level.get("wind_direction"))
+        if wspd is None or wdir is None:
+            continue
+        y = y_for_p(_safe_float(level.get("pressure")) or pressure)
+        x = side_left + 28
+        length = max(18, min(74, wspd * 1.4))
+        angle = math.radians(270.0 - wdir)
+        x2 = x + math.cos(angle) * length
+        y2 = y + math.sin(angle) * length
+        draw.line((x, y, x2, y2), fill=wind_color, width=3)
+        draw.ellipse((x2 - 3, y2 - 3, x2 + 3, y2 + 3), fill=wind_color)
+        draw.text((side_left + 118, y - 9), f"{pressure:>4} {wspd:>4.0f} kt", font=tiny_font, fill=muted)
+
+    analysis = sounding.get("analysis") or {}
+    draw.rounded_rectangle((side_left, 382, side_right, 742), radius=12, fill=(255, 255, 255, 10), outline=border, width=1)
+    draw.text((side_left + 18, 402), "Parcel / Severe Indices", font=label_font, fill=text)
+    rows = [
+        ("CAPE", analysis.get("cape"), "J/kg"),
+        ("CIN", analysis.get("cin"), "J/kg"),
+        ("LCL", analysis.get("lcl_hpa"), "hPa"),
+        ("LFC", analysis.get("lfc_hpa"), "hPa"),
+        ("EL", analysis.get("el_hpa"), "hPa"),
+        ("LI", analysis.get("lifted_index"), "C"),
+        ("K Index", analysis.get("k_index"), ""),
+        ("Total Totals", analysis.get("total_totals"), ""),
+        ("PWAT", analysis.get("pwat_mm"), "mm"),
+        ("0-6 km Shear", analysis.get("bulk_shear_0_6km_kt"), "kt"),
+    ]
+    y = 442
+    for label, value, unit in rows:
+        rendered = "--" if value is None else f"{value:g} {unit}".rstrip()
+        draw.text((side_left + 18, y), label, font=tiny_font, fill=muted)
+        draw.text((side_right - 102, y), rendered, font=tiny_font, fill=text)
+        y += 28
+
+    for key, label, color in (
+        ("lcl_hpa", "LCL", "#fbbf24"),
+        ("lfc_hpa", "LFC", "#38bdf8"),
+        ("el_hpa", "EL", "#c084fc"),
+    ):
+        pressure = _safe_float(analysis.get(key))
+        if pressure is None or not (p_top <= pressure <= p_bottom):
+            continue
+        y = y_for_p(pressure)
+        _draw_dashed_line(draw, (plot_left, y), (plot_right, y), fill=color, width=2, dash=10, gap=8)
+        draw.text((plot_right - 44, y - 20), label, font=tiny_font, fill=color)
+
+    draw.text((72, height - 44), f"Source: {sounding.get('source', 'grib')} / {sounding.get('source_model', model)}", font=tiny_font, fill=muted)
+    out = BytesIO()
+    image.save(out, format="PNG", optimize=True)
+    return out.getvalue()
+
+
 @bp.route("/api/sounding-plot", methods=["GET"])
 def get_sounding_plot():
     """
-    Proxy to the Sounding Analysis project for a full matplotlib Skew-T plot.
+    Render a local model sounding image from the same GRIB profile data used by
+    /api/sounding. This keeps Model Forecast independent from the retired
+    Sounding Analysis service.
 
     Query params:
         model, lat, lon, fhour, theme, colorblind
@@ -1820,44 +2035,26 @@ def get_sounding_plot():
     if cached is not None:
         return jsonify(cached)
 
-    # Map model names to Sounding project expectations
-    sa_model = model.lower()
-    if sa_model in ("gfs", "nam"):
-        sa_model = "gfs"
-
-    # Build payload — use "psu" source with lat/lon (point sounding)
-    payload = {
-        "source": "psu",
-        "lat": lat,
-        "lon": lon,
-        "model": sa_model,
-        "fhour": fhour,
-        "theme": theme,
-        "colorblind": colorblind,
-        "mapZoom": 2.0,
-    }
-    if run_date_token:
-        payload["date"] = run_date_token
-
     try:
-        resp = http_requests.post(_SOUNDING_API, json=payload, timeout=60)
-        resp.raise_for_status()
-        result = resp.json()
+        sounding = _build_grib_sounding(model, lat, lon, fhour)
+        image_png = _render_local_sounding_png(sounding, theme=theme, colorblind=colorblind)
+        result = {
+            "image": base64.b64encode(image_png).decode("ascii"),
+            "params": sounding.get("analysis", {}),
+            "profile": sounding.get("profile", []),
+            "meta": {
+                "model": sounding.get("model", model),
+                "source_model": sounding.get("source_model"),
+                "forecast_hour": sounding.get("forecast_hour", fhour),
+                "valid_time": sounding.get("valid_time"),
+                "source": sounding.get("source"),
+            },
+        }
         _plot_cache_set(cache_key, result)
         return jsonify(result)
-    except http_requests.exceptions.Timeout:
-        return jsonify({"error": "Sounding Analysis service timed out"}), 504
-    except http_requests.exceptions.HTTPError as e:
-        status = e.response.status_code if e.response is not None else 502
-        body = {}
-        try:
-            body = e.response.json()
-        except Exception:
-            pass
-        return jsonify({"error": body.get("error", f"Sounding Analysis returned {status}")}), status
     except Exception:
-        log.exception("Sounding plot fetch failed for %s at fhour %s (%.3f, %.3f)", model, fhour, lat, lon)
-        return json_error("Failed to fetch sounding plot from the upstream service.", 502)
+        log.exception("Local sounding plot failed for %s at fhour %s (%.3f, %.3f)", model, fhour, lat, lon)
+        return json_error("Failed to render sounding plot from model profile data.", 502)
 
 
 @bp.route("/api/cross-section", methods=["GET"])

@@ -136,7 +136,7 @@ export async function fetchSounding({ model, lat, lon, fhour }) {
   return data;
 }
 
-/* Full sounding plot from Sounding Analysis project */
+/* Full sounding plot rendered by the Model Forecast backend */
 export async function fetchSoundingPlot({ model, lat, lon, fhour, theme, colorblind, run, signal }) {
   const params = new URLSearchParams({
     model, lat: String(lat), lon: String(lon), fhour: String(fhour || 0),

@@ -22,8 +22,8 @@ COPY forecast/ forecast/
 # Copy built frontend from stage 1
 COPY --from=frontend-build /app/frontend/dist frontend/dist
 
-# Cloud Run sets $PORT; gunicorn.conf.py reads it
-ENV PORT=8080
-EXPOSE 8080
+# Cloud Run/Render override $PORT; Hugging Face Docker Spaces defaults to 7860.
+ENV PORT=7860
+EXPOSE 7860
 
 CMD ["gunicorn", "app:app", "-c", "gunicorn.conf.py"]

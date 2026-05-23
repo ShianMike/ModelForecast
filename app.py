@@ -16,14 +16,23 @@ import routes
 FRONTEND_DIR = os.path.join(os.path.dirname(__file__), "frontend", "dist")
 log = logging.getLogger(__name__)
 
+def _running_in_managed_production():
+    return bool(
+        os.environ.get("K_SERVICE")
+        or os.environ.get("RENDER")
+        or os.environ.get("SPACE_ID")
+        or os.environ.get("APP_ENV") == "production"
+        or os.environ.get("FLASK_ENV") == "production"
+    )
+
+
 # ─── Allowed origins ───────────────────────────────────────
 ALLOWED_ORIGINS = [
     "https://modelforecastpy.app",
     "https://www.modelforecastpy.app",
     "https://shianmike.github.io",
-    "https://model-forecast-693545589581.us-central1.run.app",
 ]
-if not bool(os.environ.get("K_SERVICE")):
+if not _running_in_managed_production():
     ALLOWED_ORIGINS += [
         "http://localhost:3000",
         "http://localhost:3001",
@@ -41,7 +50,8 @@ app = Flask(__name__, static_folder=FRONTEND_DIR, static_url_path="")
 CORS(app, resources={r"/api/*": {"origins": ALLOWED_ORIGINS}}, supports_credentials=False)
 
 # ─── Runtime flags ─────────────────────────────────────────
-_is_production = bool(os.environ.get("K_SERVICE"))
+_is_production = _running_in_managed_production()
+_force_https = bool(os.environ.get("K_SERVICE"))
 
 # ─── Security headers via Talisman ─────────────────────────
 
@@ -57,7 +67,7 @@ csp = {
                    "https://*.basemaps.cartocdn.com https://*.tile.openstreetmap.org "
                    "https://server.arcgisonline.com https://tilecache.rainviewer.com "
                    "https://modelforecastpy.app https://www.modelforecastpy.app "
-                   "https://model-forecast-693545589581.us-central1.run.app "
+                   "https://*.hf.space https://*.onrender.com "
                    "https://*.run.app",
     "media-src":   "'self' blob:",
     "frame-ancestors": "'none'",
@@ -68,7 +78,7 @@ csp = {
 
 Talisman(
     app,
-    force_https=_is_production,
+    force_https=_force_https,
     force_https_permanent=False,
     strict_transport_security=True,
     strict_transport_security_max_age=63072000,
