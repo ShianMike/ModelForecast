@@ -44,6 +44,13 @@ bp = Blueprint("forecast", __name__)
 
 _COMPOSITE_MAX_MAP_CELLS = 18_000
 _COMPOSITE_MAX_MAP_SIDE = 180
+_PRODUCTION_ARTIFACT_ONLY_VARIABLES = {
+    "effective_bulk_shear",
+    "stp_approx",
+    "scp",
+    "ship",
+    "critical_angle_composite",
+}
 
 
 # ─── Point endpoint cache (sounding) ───────────────────────
@@ -395,8 +402,16 @@ def _store_persistent_forecast_cache(model, variable, fhour, bbox, payload, requ
 
 
 def _artifact_only_variables():
-    raw = os.environ.get("FORECAST_ARTIFACT_ONLY_VARIABLES", "").strip()
+    raw_value = os.environ.get("FORECAST_ARTIFACT_ONLY_VARIABLES")
+    if raw_value is None:
+        if os.environ.get("APP_ENV", "").strip().lower() == "production":
+            return set(_PRODUCTION_ARTIFACT_ONLY_VARIABLES)
+        return set()
+
+    raw = raw_value.strip()
     if not raw:
+        return set()
+    if raw.lower() in {"0", "false", "no", "off", "none"}:
         return set()
     return {part.strip() for part in raw.split(",") if part.strip()}
 

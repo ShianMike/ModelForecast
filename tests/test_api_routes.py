@@ -278,6 +278,36 @@ class ApiRouteTests(unittest.TestCase):
             {"error": "Precomputed 'stp_approx' forecast artifact is not available yet."},
         )
 
+    def test_production_defaults_severe_composites_to_artifact_only(self):
+        with patch.dict(
+            "os.environ",
+            {"APP_ENV": "production"},
+            clear=True,
+        ), patch(
+            "routes.forecast_routes.artifact_cache.load_latest",
+            return_value=None,
+        ), patch(
+            "routes.forecast_routes.run_cache.is_enabled",
+            return_value=False,
+        ), patch(
+            "routes.forecast_routes.open_meteo.fetch_grid_forecast",
+            side_effect=AssertionError("live composite fetch should not run in production artifact mode"),
+        ):
+            response = self.client.get(
+                "/api/forecast",
+                query_string={
+                    "model": "hrrr",
+                    "variable": "ship",
+                    "fhour": "1",
+                },
+            )
+
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(
+            response.get_json(),
+            {"error": "Precomputed 'ship' forecast artifact is not available yet."},
+        )
+
     def test_composite_forecast_downsamples_component_grids(self):
         calls = []
 
