@@ -3,10 +3,12 @@ Routes package — registers all Flask blueprints.
 """
 from .meta import bp as meta_bp
 from .forecast_routes import bp as forecast_bp
+from .artifacts import bp as artifacts_bp
 
 ALL_BLUEPRINTS = [
     meta_bp,
     forecast_bp,
+    artifacts_bp,
 ]
 
 

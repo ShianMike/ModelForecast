@@ -420,6 +420,35 @@ def _requires_forecast_artifact(variable):
     return variable in _artifact_only_variables()
 
 
+def _resolve_region_name(bbox):
+    """Map a bounding box back to a named artifact region when possible.
+
+    Only the named regions used by the artifact generator are recognized
+    so the response stays informative without inventing labels for
+    arbitrary user-drawn bounding boxes.
+    """
+    if not bbox:
+        return None
+    try:
+        from forecast.artifact_status import REGIONS as _ARTIFACT_REGIONS
+    except Exception:
+        return None
+
+    def _approx_equal(a, b):
+        try:
+            return abs(float(a) - float(b)) < 1e-6
+        except (TypeError, ValueError):
+            return False
+
+    for name, candidate in _ARTIFACT_REGIONS.items():
+        if all(
+            _approx_equal(bbox.get(key), candidate[key])
+            for key in ("lat_min", "lat_max", "lon_min", "lon_max")
+        ):
+            return name
+    return None
+
+
 def _nearest_message_value(msg, lat, lon):
     try:
         lats = np.asarray(msg.get("lats", []), dtype=float)
@@ -1677,6 +1706,12 @@ def get_forecast():
             return json_error(
                 f"Precomputed '{variable}' forecast artifact is not available yet.",
                 503,
+                code="artifact_missing",
+                artifact_required=True,
+                model=model,
+                variable=variable,
+                forecast_hour=int(fhour),
+                region=_resolve_region_name(bbox),
             )
 
         comp = COMPOSITE_PARAMS[variable]

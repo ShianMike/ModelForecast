@@ -100,7 +100,23 @@ export async function fetchForecast({ model, parameter, fhour, bbox, signal }) {
 
     if (!res.ok) {
       const err = new Error(data.error || "Forecast fetch failed");
-      err.retryable = res.status >= 500;
+      err.status = res.status;
+      err.code = data.code;
+      /* 5xx is normally retryable, but an artifact-missing 503 is a
+         predictable empty state. Mark it explicitly so withRetry returns
+         immediately and the UI can render a friendly message instead of
+         logging fetch noise. */
+      if (data.code === "artifact_missing") {
+        err.retryable = false;
+        err.artifactMissing = true;
+        err.artifactRequired = !!data.artifact_required;
+        err.model = data.model;
+        err.variable = data.variable;
+        err.forecastHour = data.forecast_hour;
+        err.region = data.region;
+      } else {
+        err.retryable = res.status >= 500;
+      }
       throw err;
     }
 

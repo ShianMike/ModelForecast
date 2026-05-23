@@ -17,8 +17,20 @@ class QueryValidationError(ValueError):
         self.status_code = status_code
 
 
-def json_error(message, status_code):
-    return jsonify({"error": message}), status_code
+def json_error(message, status_code, **extra):
+    """Return a JSON error response.
+
+    Always emits an ``{"error": ...}`` key so existing clients keep working.
+    Additional keyword arguments are merged into the body for structured
+    metadata (e.g., ``code="artifact_missing"``), and ``None`` values are
+    dropped so callers can pass optional fields without polluting the payload.
+    """
+    body = {"error": message}
+    for key, value in extra.items():
+        if value is None:
+            continue
+        body[key] = value
+    return jsonify(body), status_code
 
 
 def _coerce_float(raw_value, name):

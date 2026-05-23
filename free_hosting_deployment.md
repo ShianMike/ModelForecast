@@ -39,3 +39,4 @@ After the `*.hf.space` URL is healthy, configure the custom domain in the Space 
 
 - Do not set `FORECAST_CACHE_BUCKET` on free non-Google hosting. Without it, the app uses in-memory/runtime caches only and avoids Google Cloud Storage.
 - The sounding plot is rendered inside Model Forecast. It does not require publishing or calling `soundingscopepy.app`.
+- Severe composites on Render are served from precomputed artifacts. See `docs/artifact_pipeline.md` for the refresh schedule, the verifier script, and production smoke-test URLs (including `/api/artifacts/status`).

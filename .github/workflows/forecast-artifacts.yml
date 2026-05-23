@@ -33,6 +33,12 @@ jobs:
             --variables effective_bulk_shear stp_approx scp ship critical_angle_composite \
             --hours auto
 
+      - name: Verify HRRR CONUS severe composite coverage (f000-f048)
+        # Fail the workflow before commit/push if any of the five severe
+        # composites are missing hours or have malformed JSON. This prevents
+        # silent regressions where the deploy ships an incomplete artifact set.
+        run: python scripts/verify_forecast_artifacts.py
+
       - name: Commit artifact updates
         run: |
           git config user.name "github-actions[bot]"

@@ -11,6 +11,9 @@ export default function AnimationControls({
   speed, setSpeed,
   run,
   validTime,
+  source,
+  artifactCycle,
+  artifactGeneratedAt,
 }) {
   const stepBack = () => setFhour(h => Math.max(0, h - step));
   const stepFwd  = () => setFhour(h => Math.min(maxFhour, h + step));
@@ -57,6 +60,26 @@ export default function AnimationControls({
 
   const zuluLabel = useMemo(() => validZuluLabel(fhour, validTime, run), [fhour, validTime, run]);
 
+  const artifactBadge = useMemo(() => {
+    if (source !== "precomputed_artifact") return null;
+    let freshness = "";
+    if (artifactGeneratedAt) {
+      const ts = Date.parse(artifactGeneratedAt);
+      if (Number.isFinite(ts)) {
+        const hours = (Date.now() - ts) / 3_600_000;
+        freshness = hours >= 1 ? ` · ${hours.toFixed(1)}h old` : " · fresh";
+      }
+    }
+    return (
+      <span
+        className="anim-artifact-badge mono"
+        title={artifactCycle ? `Artifact cycle ${artifactCycle}` : "Precomputed artifact"}
+      >
+        Precomputed{freshness}
+      </span>
+    );
+  }, [source, artifactCycle, artifactGeneratedAt]);
+
   return (
     <div className="anim-controls">
       <div className="anim-row">
@@ -71,6 +94,7 @@ export default function AnimationControls({
         <div className="anim-time">
           <span className="anim-fhour mono">F{String(fhour).padStart(3, "0")}</span>
           <span className="anim-valid mono">{zuluLabel}</span>
+          {artifactBadge}
         </div>
 
         <div className="anim-speed">

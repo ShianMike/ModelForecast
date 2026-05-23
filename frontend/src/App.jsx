@@ -825,7 +825,17 @@ export default function App() {
       frameCacheSet(key, data);
     } catch (err) {
       if (err.aborted || requestId !== gridRequestIdRef.current) return;
-      setGridError(err.message);
+      if (err.artifactMissing) {
+        /* Expected empty state for artifact-only parameters; do not
+           treat as a generic fetch failure. */
+        setGridData(null);
+        setGridError(
+          "Precomputed artifact for this parameter is not ready yet. " +
+          "Severe composite artifacts refresh every six hours; try again shortly."
+        );
+      } else {
+        setGridError(err.message);
+      }
     } finally {
       if (requestId === gridRequestIdRef.current) setGridLoading(false);
     }
@@ -1002,7 +1012,7 @@ export default function App() {
     };
   }, [diffMode, gridData, fhour, fhourStep, selectedModel, selectedParam, region, frameCacheGet]);
 
-  const mapGridData = diffMode ? (displayGridData || gridData) : gridData;
+  const mapGridData = diffMode ? (gridData ? (displayGridData || gridData) : null) : gridData;
 
   if (initLoading) {
     return (
@@ -1154,6 +1164,9 @@ export default function App() {
             setSpeed={setAnimSpeed}
             run={gridData?.run}
             validTime={gridData?.valid_time}
+            source={gridData?.source}
+            artifactCycle={gridData?.artifact_cycle}
+            artifactGeneratedAt={gridData?.artifact_generated_at}
             loading={gridLoading}
           />
         </div>

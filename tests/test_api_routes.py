@@ -2,6 +2,7 @@ import unittest
 import base64
 import threading
 from collections import OrderedDict
+from pathlib import Path
 from unittest.mock import patch
 
 from app import app
@@ -269,14 +270,25 @@ class ApiRouteTests(unittest.TestCase):
                     "model": "hrrr",
                     "variable": "stp_approx",
                     "fhour": "0",
+                    "lat_min": "24",
+                    "lat_max": "50",
+                    "lon_min": "-125",
+                    "lon_max": "-66",
                 },
             )
 
         self.assertEqual(response.status_code, 503)
+        payload = response.get_json()
         self.assertEqual(
-            response.get_json(),
-            {"error": "Precomputed 'stp_approx' forecast artifact is not available yet."},
+            payload["error"],
+            "Precomputed 'stp_approx' forecast artifact is not available yet.",
         )
+        self.assertEqual(payload["code"], "artifact_missing")
+        self.assertTrue(payload["artifact_required"])
+        self.assertEqual(payload["model"], "hrrr")
+        self.assertEqual(payload["variable"], "stp_approx")
+        self.assertEqual(payload["forecast_hour"], 0)
+        self.assertEqual(payload["region"], "conus")
 
     def test_production_defaults_severe_composites_to_artifact_only(self):
         with patch.dict(
@@ -303,10 +315,19 @@ class ApiRouteTests(unittest.TestCase):
             )
 
         self.assertEqual(response.status_code, 503)
+        payload = response.get_json()
         self.assertEqual(
-            response.get_json(),
-            {"error": "Precomputed 'ship' forecast artifact is not available yet."},
+            payload["error"],
+            "Precomputed 'ship' forecast artifact is not available yet.",
         )
+        self.assertEqual(payload["code"], "artifact_missing")
+        self.assertTrue(payload["artifact_required"])
+        self.assertEqual(payload["model"], "hrrr")
+        self.assertEqual(payload["variable"], "ship")
+        self.assertEqual(payload["forecast_hour"], 1)
+        # No bounding box was supplied so the region should be omitted rather
+        # than guessed.
+        self.assertNotIn("region", payload)
 
     def test_composite_forecast_downsamples_component_grids(self):
         calls = []
@@ -347,6 +368,16 @@ class ApiRouteTests(unittest.TestCase):
         self.assertLess(len(payload["values"][0]), 4)
         self.assertEqual(payload["run"], "20260523/07z")
         self.assertEqual(payload["valid_time"], "2026-05-23T07:00:00Z")
+
+    def test_frontend_artifact_missing_path_clears_stale_grid_source(self):
+        app_source = Path("frontend/src/App.jsx").read_text(encoding="utf-8")
+
+        self.assertIn("if (err.artifactMissing)", app_source)
+        self.assertIn("setGridData(null);", app_source)
+        self.assertIn(
+            "const mapGridData = diffMode ? (gridData ? (displayGridData || gridData) : null) : gridData;",
+            app_source,
+        )
 
     def test_ship_composite_skips_unused_height_grid_fetch(self):
         calls = []
