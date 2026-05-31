@@ -1,9 +1,6 @@
 name: Generate Forecast Artifacts
 
 on:
-  schedule:
-    # 00z, 06z, 12z, and 18z artifacts after a two-hour data availability buffer.
-    - cron: "30 2,8,14,20 * * *"
   workflow_dispatch:
 
 permissions:
